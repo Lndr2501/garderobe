@@ -1,0 +1,255 @@
+import { COLORS } from "../../shared/taxonomy.ts";
+
+export interface ProcessedImage {
+	full: Blob;
+	thumb: Blob;
+	/** Small JPEG on white as data URL, for AI vision requests. */
+	ai: string;
+	colorHex: string;
+	preview: string;
+	bgRemoved: boolean;
+}
+
+export type Stage = "laden" | "freistellen" | "modell" | "fertig";
+
+export interface ProcessOptions {
+	removeBg: boolean;
+	quality: "fast" | "best";
+	onProgress?: (stage: Stage, pct: number) => void;
+}
+
+type Drawable = ImageBitmap | HTMLImageElement | HTMLCanvasElement;
+
+async function loadDrawable(blob: Blob): Promise<Drawable> {
+	try {
+		return await createImageBitmap(blob, { imageOrientation: "from-image" });
+	} catch {
+		const url = URL.createObjectURL(blob);
+		try {
+			const img = new Image();
+			img.decoding = "async";
+			img.src = url;
+			await img.decode();
+			return img;
+		} catch {
+			throw new Error("Bild konnte nicht gelesen werden (HEIC? Bitte als JPG/PNG exportieren).");
+		} finally {
+			setTimeout(() => URL.revokeObjectURL(url), 1000);
+		}
+	}
+}
+
+function dims(d: Drawable): { w: number; h: number } {
+	if (d instanceof HTMLImageElement) return { w: d.naturalWidth, h: d.naturalHeight };
+	return { w: d.width, h: d.height };
+}
+
+function toCanvas(d: Drawable, maxDim: number): HTMLCanvasElement {
+	const { w, h } = dims(d);
+	const scale = Math.min(1, maxDim / Math.max(w, h));
+	const c = document.createElement("canvas");
+	c.width = Math.max(1, Math.round(w * scale));
+	c.height = Math.max(1, Math.round(h * scale));
+	const ctx = c.getContext("2d")!;
+	ctx.imageSmoothingQuality = "high";
+	ctx.drawImage(d, 0, 0, c.width, c.height);
+	return c;
+}
+
+function transparencyRatio(c: HTMLCanvasElement): number {
+	const sample = toCanvas(c, 160);
+	const data = sample.getContext("2d")!.getImageData(0, 0, sample.width, sample.height).data;
+	let transparent = 0;
+	for (let i = 3; i < data.length; i += 4) if (data[i]! < 250) transparent++;
+	return transparent / (data.length / 4);
+}
+
+/** Crops fully transparent borders and adds a little padding. */
+function trimTransparent(c: HTMLCanvasElement, pad = 0.03): HTMLCanvasElement {
+	const ctx = c.getContext("2d")!;
+	const { width: w, height: h } = c;
+	const data = ctx.getImageData(0, 0, w, h).data;
+	let minX = w,
+		minY = h,
+		maxX = -1,
+		maxY = -1;
+	for (let y = 0; y < h; y++) {
+		for (let x = 0; x < w; x++) {
+			if (data[(y * w + x) * 4 + 3]! > 12) {
+				if (x < minX) minX = x;
+				if (x > maxX) maxX = x;
+				if (y < minY) minY = y;
+				if (y > maxY) maxY = y;
+			}
+		}
+	}
+	if (maxX < 0) return c;
+	const p = Math.round(Math.max(maxX - minX, maxY - minY) * pad);
+	minX = Math.max(0, minX - p);
+	minY = Math.max(0, minY - p);
+	maxX = Math.min(w - 1, maxX + p);
+	maxY = Math.min(h - 1, maxY + p);
+	const out = document.createElement("canvas");
+	out.width = maxX - minX + 1;
+	out.height = maxY - minY + 1;
+	out.getContext("2d")!.drawImage(c, minX, minY, out.width, out.height, 0, 0, out.width, out.height);
+	return out;
+}
+
+function canvasBlob(c: HTMLCanvasElement, type: string, quality?: number): Promise<Blob | null> {
+	return new Promise((resolve) => c.toBlob((b) => resolve(b), type, quality));
+}
+
+/** Encodes to WebP when the browser can (keeps alpha, small), otherwise PNG (alpha) or JPEG. */
+async function encode(c: HTMLCanvasElement, maxDim: number, alpha: boolean): Promise<Blob> {
+	const scaled = toCanvas(c, maxDim);
+	const webp = await canvasBlob(scaled, "image/webp", 0.86);
+	if (webp && webp.type === "image/webp") return webp;
+	if (alpha) {
+		const png = await canvasBlob(scaled, "image/png");
+		if (png) return png;
+	}
+	const jpg = await canvasBlob(scaled, "image/jpeg", 0.86);
+	if (!jpg) throw new Error("Bild konnte nicht kodiert werden");
+	return jpg;
+}
+
+function aiDataUrl(c: HTMLCanvasElement): string {
+	const scaled = toCanvas(c, 512);
+	const out = document.createElement("canvas");
+	out.width = scaled.width;
+	out.height = scaled.height;
+	const ctx = out.getContext("2d")!;
+	ctx.fillStyle = "#ffffff";
+	ctx.fillRect(0, 0, out.width, out.height);
+	ctx.drawImage(scaled, 0, 0);
+	return out.toDataURL("image/jpeg", 0.85);
+}
+
+/** Most common color among opaque pixels (center region if the image has a background). */
+export function dominantColor(c: HTMLCanvasElement, hasAlpha: boolean): string {
+	const s = toCanvas(c, 120);
+	const ctx = s.getContext("2d")!;
+	const x0 = hasAlpha ? 0 : Math.floor(s.width * 0.25);
+	const y0 = hasAlpha ? 0 : Math.floor(s.height * 0.25);
+	const w = hasAlpha ? s.width : Math.ceil(s.width * 0.5);
+	const h = hasAlpha ? s.height : Math.ceil(s.height * 0.5);
+	const data = ctx.getImageData(x0, y0, w, h).data;
+	const buckets = new Map<number, { n: number; r: number; g: number; b: number }>();
+	for (let i = 0; i < data.length; i += 4) {
+		if (data[i + 3]! < 200) continue;
+		const r = data[i]!,
+			g = data[i + 1]!,
+			b = data[i + 2]!;
+		const key = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+		const e = buckets.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };
+		e.n++;
+		e.r += r;
+		e.g += g;
+		e.b += b;
+		buckets.set(key, e);
+	}
+	let best: { n: number; r: number; g: number; b: number } | null = null;
+	for (const e of buckets.values()) if (!best || e.n > best.n) best = e;
+	if (!best) return "";
+	const hex = (v: number) => Math.round(v / best!.n).toString(16).padStart(2, "0");
+	return `#${hex(best.r)}${hex(best.g)}${hex(best.b)}`;
+}
+
+function hexToRgb(hex: string): [number, number, number] | null {
+	const m = hex.match(/^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+	return m ? [parseInt(m[1]!, 16), parseInt(m[2]!, 16), parseInt(m[3]!, 16)] : null;
+}
+
+function rgbToLab([r, g, b]: [number, number, number]): [number, number, number] {
+	const lin = (v: number) => {
+		v /= 255;
+		return v > 0.04045 ? ((v + 0.055) / 1.055) ** 2.4 : v / 12.92;
+	};
+	const R = lin(r),
+		G = lin(g),
+		B = lin(b);
+	const X = (R * 0.4124 + G * 0.3576 + B * 0.1805) / 0.95047;
+	const Y = R * 0.2126 + G * 0.7152 + B * 0.0722;
+	const Z = (R * 0.0193 + G * 0.1192 + B * 0.9505) / 1.08883;
+	const f = (t: number) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+	return [116 * f(Y) - 16, 500 * (f(X) - f(Y)), 200 * (f(Y) - f(Z))];
+}
+
+/** Maps a hex color to the closest named wardrobe color. */
+export function nearestColorKey(hex: string): string | null {
+	const rgb = hexToRgb(hex);
+	if (!rgb) return null;
+	const lab = rgbToLab(rgb);
+	let best: string | null = null;
+	let bestD = Infinity;
+	for (const c of COLORS) {
+		const crgb = hexToRgb(c.hex);
+		if (!crgb) continue;
+		const l2 = rgbToLab(crgb);
+		const d = (lab[0] - l2[0]) ** 2 + (lab[1] - l2[1]) ** 2 + (lab[2] - l2[2]) ** 2;
+		if (d < bestD) {
+			bestD = d;
+			best = c.key;
+		}
+	}
+	return best;
+}
+
+async function removeBg(blob: Blob, quality: "fast" | "best", onProgress?: ProcessOptions["onProgress"]): Promise<Blob> {
+	const mod = await import("@imgly/background-removal");
+	return mod.removeBackground(blob, {
+		model: quality === "fast" ? "isnet_quint8" : "isnet_fp16",
+		output: { format: "image/png", quality: 1 },
+		progress: (key: string, current: number, total: number) => {
+			if (key.startsWith("fetch")) onProgress?.("modell", total ? current / total : 0);
+			else onProgress?.("freistellen", total ? current / total : 0.5);
+		},
+	});
+}
+
+export async function processImage(file: Blob, opts: ProcessOptions): Promise<ProcessedImage> {
+	opts.onProgress?.("laden", 0);
+	const drawable = await loadDrawable(file);
+	let canvas = toCanvas(drawable, 1600);
+	if ("close" in drawable && typeof drawable.close === "function") drawable.close();
+	let hasAlpha = transparencyRatio(canvas) > 0.02;
+	let bgRemoved = false;
+	if (opts.removeBg && !hasAlpha) {
+		opts.onProgress?.("freistellen", 0);
+		const src = await canvasBlob(canvas, "image/png");
+		if (!src) throw new Error("Bild konnte nicht vorbereitet werden");
+		const cut = await removeBg(src, opts.quality, opts.onProgress);
+		const cutDrawable = await loadDrawable(cut);
+		const cutCanvas = toCanvas(cutDrawable, 1600);
+		// Guard against the model removing (almost) everything.
+		if (transparencyRatio(cutCanvas) < 0.985) {
+			canvas = cutCanvas;
+			hasAlpha = true;
+			bgRemoved = true;
+		}
+	}
+	if (hasAlpha) canvas = trimTransparent(canvas);
+	const [full, thumb] = await Promise.all([encode(canvas, 1200, hasAlpha), encode(canvas, 380, hasAlpha)]);
+	opts.onProgress?.("fertig", 1);
+	return {
+		full,
+		thumb,
+		ai: aiDataUrl(canvas),
+		colorHex: dominantColor(canvas, hasAlpha),
+		preview: URL.createObjectURL(full),
+		bgRemoved,
+	};
+}
+
+/** Simple resize/encode for photos that must keep their background (e.g. person photo, shopping check). */
+export async function prepareImage(file: Blob, maxDim = 1400): Promise<{ blob: Blob; dataUrl: string }> {
+	const d = await loadDrawable(file);
+	const c = toCanvas(d, maxDim);
+	const blob = (await canvasBlob(c, "image/jpeg", 0.88)) ?? file;
+	return { blob, dataUrl: aiDataUrl(c) };
+}
+
+export function isImageFile(f: File): boolean {
+	return f.type.startsWith("image/") || /\.(heic|heif|jpe?g|png|webp|avif)$/i.test(f.name);
+}

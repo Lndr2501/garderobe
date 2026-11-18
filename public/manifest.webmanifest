@@ -1,0 +1,23 @@
+{
+	"name": "Garderobe",
+	"short_name": "Garderobe",
+	"description": "Deine virtuelle Garderobe",
+	"lang": "de",
+	"start_url": "/",
+	"scope": "/",
+	"display": "standalone",
+	"orientation": "portrait",
+	"background_color": "#eaf2fc",
+	"theme_color": "#cfe2fb",
+	"icons": [
+		{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+		{ "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+		{ "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+		{ "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+	],
+	"shortcuts": [
+		{ "name": "Teil hinzufügen", "url": "/neu" },
+		{ "name": "Outfits", "url": "/outfits" },
+		{ "name": "Assistent", "url": "/assistent" }
+	]
+}
