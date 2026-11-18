@@ -365,7 +365,7 @@ export function TripDetail() {
 					}}
 				/>
 			)}
-			{settings && !settings.ai.configured && <div className="tiny muted">Tipp: Mit eingerichteter KI werden Packlisten noch schlauer.</div>}
+			{settings && !settings.ai.areas.text && <div className="tiny muted">Tipp: Mit eingerichteter KI werden Packlisten noch schlauer.</div>}
 		</div>
 	);
 }

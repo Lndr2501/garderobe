@@ -29,7 +29,7 @@ export function RecognitionStatus({ items }: { items: Item[] }) {
 	const [hideNever, setHideNever] = useLocal("gd-hide-recognize", false);
 	const running = items.filter(isRecognizing);
 	const failed = items.filter(recognitionFailed);
-	const never = settings?.ai.configured && !hideNever ? items.filter(neverRecognized) : [];
+	const never = settings?.ai.areas.vision && !hideNever ? items.filter(neverRecognized) : [];
 
 	const retry = async (list: Item[]) => {
 		setBusy(true);

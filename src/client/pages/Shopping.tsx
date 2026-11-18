@@ -66,7 +66,7 @@ function Thumbs({ ids, map, empty }: { ids: string[]; map: Map<string, Item>; em
 
 export function Shopping() {
 	const { data: settings } = useSettings();
-	const aiOn = !!settings?.ai.configured;
+	const aiOn = !!settings?.ai.areas.vision;
 	const map = useItemMap();
 	const check = useShoppingCheck();
 	const toast = useToast();

@@ -113,7 +113,7 @@ export function ItemEdit() {
 					<input ref={backInput} type="file" accept="image/*" hidden onChange={(e) => void replacePhoto(e.target.files?.[0], "back")} />
 				</div>
 				<div className="card">
-					<ItemForm value={draft} onChange={setDraft} onAiFill={settings?.ai.configured ? aiFill : undefined} aiBusy={aiBusy} currency={settings?.currency} />
+					<ItemForm value={draft} onChange={setDraft} onAiFill={settings?.ai.areas.vision ? aiFill : undefined} aiBusy={aiBusy} currency={settings?.currency} />
 				</div>
 			</div>
 			<button className="btn primary block" onClick={submit} disabled={save.isPending}>

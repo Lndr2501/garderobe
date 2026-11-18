@@ -136,3 +136,23 @@ export function tryOnPrompt(itemNames: string[]): string {
 	return `Fotorealistische virtuelle Anprobe: Zeige die Person aus dem ersten Bild, wie sie folgende Kleidungsstücke aus den weiteren Bildern trägt: ${itemNames.join(", ")}.
 Behalte Gesicht, Frisur, Körperform, Pose, Licht und Hintergrund der Person exakt bei. Übernimm Schnitt, Farbe, Muster und Material der Kleidung originalgetreu. Ganzkörperansicht, natürlicher Faltenwurf, keine zusätzlichen Personen, kein Text.`;
 }
+
+/** Try-on prompt for FLUX.2 (English, references are numbered: image 1 = person). */
+export function tryOnPromptEn(itemNames: string[]): string {
+	return `Photorealistic virtual try-on. Show the person from image 1 wearing the clothing from the other reference images (${itemNames.join(", ")}). Keep the face, hair, body shape, pose, lighting and background of image 1 exactly. Reproduce cut, color, pattern, logos and material of each garment faithfully. Full body view, natural folds, no extra people, no text.`;
+}
+
+/** Studio picture from the user's photo (FLUX.2 reference edit). English works best for these models. */
+export function studioPrompt(category: string, kind: string): string {
+	const what = kind ? ` (${kind})` : "";
+	const keep =
+		"Keep every detail identical to the reference: exact color, fabric texture, pattern, logo, print, buttons, zipper, seams, wash and fading. Do not add or invent logos, text or decorations.";
+	if (category === "shoes") {
+		return `Professional e-commerce product photo of the exact same pair of shoes${what} as in the reference image, three-quarter side view of the pair, centered, soft diffused studio lighting, subtle soft contact shadow, clean light grey seamless background. ${keep} No person, no feet, no text.`;
+	}
+	if (category === "bag" || category === "accessory" || category === "other") {
+		return `Professional e-commerce product photo of the exact same item${what} as in the reference image, front view, standing upright with natural volume, centered, soft diffused studio lighting, subtle soft contact shadow, clean light grey seamless background. ${keep} No person, no text.`;
+	}
+	const shape = category === "bottom" ? "with both legs fully visible" : "with natural shoulders and sleeves";
+	return `Professional e-commerce product photo of the exact same garment${what} as in the reference image, shown on an invisible ghost mannequin so it has natural three-dimensional volume, ${shape}, front view, centered, soft diffused studio lighting, subtle soft contact shadow, clean light grey seamless background. ${keep} No person, no hanger, no mannequin visible, no text.`;
+}

@@ -48,7 +48,7 @@ export function AddItems() {
 	const [, navigate] = useLocation();
 	const bg = removeBg ?? settings?.bgRemoval.enabled ?? true;
 	const [enhance, setEnhance] = useLocal("gd-enhance", true);
-	const aiOn = !!settings?.ai.configured;
+	const aiOn = !!settings?.ai.areas.vision;
 
 	const update = useCallback((id: string, patch: Partial<Entry>) => {
 		setEntries((list) => list.map((e) => (e.id === id ? { ...e, ...patch } : e)));

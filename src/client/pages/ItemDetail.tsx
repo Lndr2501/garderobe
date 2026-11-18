@@ -1,19 +1,21 @@
-import { Archive, ArchiveRestore, ArrowLeft, Camera, Check, Eraser, Heart, Pencil, RefreshCw, RotateCw, Sparkles, Trash2, TriangleAlert } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeft, Camera, Check, Eraser, Heart, Pencil, RefreshCw, RotateCw, Sparkles, Trash2, TriangleAlert, Wand2, X } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import { pairingItems } from "../../shared/rules.ts";
 import { categoryDef, colorDef, FORMALITY_LABELS, SEASONS, WARMTH_LABELS } from "../../shared/taxonomy.ts";
 import type { Item } from "../../shared/types.ts";
-import { imgUrl, uploadImage } from "../api.ts";
-import { Meter, swatchStyle } from "../components/Inputs.tsx";
+import { api, imgUrl, uploadImage } from "../api.ts";
+import { Meter, Segmented, swatchStyle } from "../components/Inputs.tsx";
 import { ImageEditor } from "../components/ImageEditor.tsx";
 import { ItemImage } from "../components/ItemImage.tsx";
 import { PageHead } from "../components/Layout.tsx";
+import { Stage } from "../components/Stage.tsx";
 import { errorText, useToast } from "../components/Toast.tsx";
 import { daysBetween, localDate, relativeDays } from "../lib/date.ts";
 import { money } from "../lib/format.ts";
 import { processImage, rotateImage } from "../lib/image.ts";
 import { isRecognizing, recognitionFailed, retagItem } from "../lib/recognize.ts";
+import { frontKey, hasStudio, startStudio, studioBusy, studioStatusText } from "../lib/studio.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocal } from "../lib/useLocal.ts";
 import { keys, useDeleteItem, useItems, useOutfits, useSaveItem, useSetWear, useSettings, useTodayWear } from "../queries.ts";
@@ -98,7 +100,33 @@ export function ItemDetail() {
 	const cat = categoryDef(item.category);
 	const recognizing = isRecognizing(item);
 	const failed = recognitionFailed(item);
-	const aiOn = !!settings?.ai.configured;
+	const aiOn = !!settings?.ai.areas.vision;
+	const studioOn = !!settings?.ai.areas.studio;
+	const showingBack = flipped && !!item.imageBack;
+	const showingStudio = !showingBack && hasStudio(item) && !item.preferOriginal;
+	const visibleKey = showingBack ? (item.imageBack ?? item.thumbBack) : frontKey(item, "full");
+	const studioWorking = studioBusy(item);
+	const putItem = (saved: Item) => qc.setQueryData<Item[]>(keys.items, (old) => old?.map((x) => (x.id === saved.id ? saved : x)));
+
+	const makeStudio = async () => {
+		setBusy("Studio-Bild wird vorbereitet …");
+		try {
+			putItem(await startStudio(item));
+			toast("Studio-Bild ist bestellt – dauert ca. 30 s bis 1 Min", "ok");
+		} catch (e) {
+			toast(errorText(e), "error");
+		} finally {
+			setBusy("");
+		}
+	};
+
+	const dropStudio = async () => {
+		try {
+			putItem(await api<Item>(`/api/items/${item.id}/studio`, { method: "DELETE" }));
+		} catch (e) {
+			toast(errorText(e), "error");
+		}
+	};
 
 	const turn = async () => {
 		const side = flipped && item.imageBack ? "back" : "front";
@@ -159,18 +187,48 @@ export function ItemDetail() {
 			/>
 			<div className="two-col">
 				<div className="card" style={{ padding: 10 }}>
-					<button className={`flip ${flipped ? "flipped" : ""} ${wiggle ? "wiggle" : ""}`} onClick={tapImage} aria-label={item.imageBack ? "Umdrehen" : "Bild"}>
-						<div className="flip-inner">
-							<div className="flip-face">
-								<ItemImage item={item} size="full" />
-							</div>
-							{item.imageBack && (
-								<div className="flip-face back">
-									<ItemImage item={item} size="full" side="back" />
+					{hasStudio(item) && !showingBack && (
+						<div className="studio-bar">
+							<Segmented
+								options={[
+									{ key: "studio", label: "Studio" },
+									{ key: "original", label: "Dein Foto" },
+								]}
+								value={item.preferOriginal ? "original" : "studio"}
+								onChange={(v) => save.mutate({ id: item.id, data: { preferOriginal: v === "original" } })}
+							/>
+						</div>
+					)}
+					<Stage shine={imgUrl(visibleKey)}>
+						<button className={`flip ${flipped ? "flipped" : ""} ${wiggle ? "wiggle" : ""}`} onClick={tapImage} aria-label={item.imageBack ? "Umdrehen" : "Bild"}>
+							<div className="flip-inner">
+								<div className="flip-face">
+									<ItemImage item={item} size="full" />
 								</div>
+								{item.imageBack && (
+									<div className="flip-face back">
+										<ItemImage item={item} size="full" side="back" />
+									</div>
+								)}
+							</div>
+						</button>
+					</Stage>
+					{(studioWorking || item.studioState === "failed") && (
+						<div className={`ai-note ${item.studioState === "failed" ? "warn" : ""}`} role="status">
+							{item.studioState === "failed" ? <TriangleAlert size={15} /> : item.studioState === "waiting" ? <Wand2 size={15} /> : <span className="spinner" style={{ width: 15, height: 15 }} />}
+							<span>{studioStatusText(item)}</span>
+							{item.studioState === "failed" && studioOn && (
+								<button className="btn small" onClick={() => void makeStudio()} disabled={!!busy}>
+									Nochmal
+								</button>
+							)}
+							{(item.studioState === "queued" || item.studioState === "waiting") && (
+								<button className="icon-btn" aria-label="Studio-Bild abbrechen" onClick={() => void dropStudio()}>
+									<X size={15} />
+								</button>
 							)}
 						</div>
-					</button>
+					)}
 					{(recognizing || failed) && (
 						<div className={`ai-note ${failed ? "warn" : ""}`} role="status">
 							{recognizing ? <span className="spinner" style={{ width: 15, height: 15 }} /> : <TriangleAlert size={15} />}
@@ -183,7 +241,17 @@ export function ItemDetail() {
 						</div>
 					)}
 					<div className="row wrap" style={{ justifyContent: "center", marginTop: 6, gap: 8 }}>
-						{(item.imageFront || item.imageBack) && (
+						{studioOn && item.imageFront && !showingBack && !studioWorking && (
+							<button className="btn soft small" onClick={() => void makeStudio()} disabled={!!busy}>
+								<Wand2 size={15} /> {hasStudio(item) ? "Studio neu malen" : "Studio-Bild"}
+							</button>
+						)}
+						{showingStudio && (
+							<button className="btn soft small" onClick={() => void dropStudio()} disabled={!!busy}>
+								<Trash2 size={15} /> Studio-Bild löschen
+							</button>
+						)}
+						{(item.imageFront || item.imageBack) && !showingStudio && (
 							<button className="btn soft small" onClick={() => void turn()} disabled={!!busy}>
 								<RotateCw size={15} /> Drehen
 							</button>
@@ -200,7 +268,7 @@ export function ItemDetail() {
 								<Camera size={15} /> {busy || "Rückseite hinzufügen"}
 							</button>
 						)}
-						{(item.imageFront || item.thumbFront) && (
+						{(item.imageFront || item.thumbFront) && !showingStudio && (
 							<button className="btn soft small" onClick={() => setEditing(flipped && item.imageBack ? "back" : "front")}>
 								<Eraser size={15} /> Bild bearbeiten
 							</button>

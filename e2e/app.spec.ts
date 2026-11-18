@@ -97,12 +97,24 @@ test("core: add item, wear it, see it in wardrobe and stats", async ({ page }, i
 test("ai: connect mock provider, auto-tag, chat, try-on, shopping, packing", async ({ page }, info) => {
 	await login(page);
 	await page.goto("/einstellungen");
-	await page.getByPlaceholder("https://api.openai.com/v1").fill("http://localhost:8799/v1");
-	await page.getByPlaceholder("gpt-4.1-mini").fill("mock-chat");
-	await page.getByPlaceholder("gpt-image-1").fill("mock-image");
-	await page.getByRole("button", { name: "Verbindung testen" }).click();
+	// The server (and its settings) is shared by both browser projects.
+	const before = (await (await page.request.get("/api/settings")).json()) as { ai: { providers: unknown[] } };
+	if (!before.ai.providers.length) {
+		await page.getByRole("button", { name: "Eigener" }).click();
+		await page.getByLabel("Name des Anbieters").fill("Mock");
+		await page.getByPlaceholder("https://api.openai.com/v1").fill("http://localhost:8799/v1");
+		await page.getByLabel("Modell für Texte").fill("mock-chat");
+		await page.getByLabel("Modell für Erkennung").fill("mock-vision");
+		for (const area of ["Studio-Bild", "Anprobe"]) {
+			await page.getByLabel(`Anbieter für ${area}`).selectOption({ label: "Mock" });
+			await page.getByLabel(`Modell für ${area}`).fill("mock-image");
+		}
+	}
+	await page.getByRole("button", { name: "Testen" }).click();
 	await expect(page.getByText("Verbindung klappt")).toBeVisible();
 	await expect(page.getByText("3 Modelle gefunden", { exact: false })).toBeVisible();
+	const saved = (await (await page.request.get("/api/settings")).json()) as { ai: { areas: Record<string, boolean> } };
+	expect(saved.ai.areas).toEqual({ text: true, vision: true, studio: true, tryon: true });
 	await page.screenshot({ path: `${SHOTS}/${info.project.name}-settings.png`, fullPage: true });
 
 	// Recognition runs on the server (workflow); the app shows progress and turns the photo upright.
@@ -125,6 +137,23 @@ test("ai: connect mock provider, auto-tag, chat, try-on, shopping, packing", asy
 	}, `/api/img/${(await newestItem(page)).imageFront}`);
 	// The 600×800 test photo was reported "collar left" → turned 90°, so it is now wider than tall.
 	expect(dims.w).toBeGreaterThan(dims.h);
+
+	// Studio picture: made by the image model, finished (background) in the app, shown in 3D.
+	await page.getByRole("button", { name: "Studio-Bild", exact: true }).click();
+	await expect
+		.poll(async () => {
+			const items = (await (await page.request.get("/api/items")).json()) as (ApiItem & { studioState: string; imageStudio: string | null })[];
+			const it = items.find((i) => i.id === added.id)!;
+			return `${it.studioState}|${!!it.imageStudio}`;
+		}, { timeout: 60_000 })
+		.toBe("done|true");
+	await expect(page.getByRole("radio", { name: "Studio" })).toBeVisible();
+	const studioKey = ((await (await page.request.get(`/api/items/${added.id}`)).json()) as { imageStudio: string }).imageStudio;
+	await expect(page.locator(".stage .flip-face img").first()).toHaveAttribute("src", `/api/img/${studioKey}`);
+	await page.getByRole("radio", { name: "Dein Foto" }).click();
+	await expect(page.getByRole("radio", { name: "Dein Foto" })).toHaveAttribute("aria-checked", "true");
+	await page.screenshot({ path: `${SHOTS}/${info.project.name}-studio.png` });
+	await page.getByRole("radio", { name: "Studio" }).click();
 
 	await page.goto("/outfits");
 	await expect(page.getByText("KI-Kombi").first()).toBeVisible();

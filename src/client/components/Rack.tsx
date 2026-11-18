@@ -4,6 +4,7 @@ import { colorDef } from "../../shared/taxonomy.ts";
 import type { Item } from "../../shared/types.ts";
 import { HangerHook } from "./Hanger.tsx";
 import { imgUrl } from "../api.ts";
+import { frontKey } from "../lib/studio.ts";
 import { cachedHook, detectHook } from "../lib/hanger.ts";
 import { ItemImage } from "./ItemImage.tsx";
 
@@ -123,7 +124,7 @@ export function Rack({ items, display, onOpen, label }: RackProps) {
 				}}
 			>
 				{items.map((item, i) => {
-					const thumb = imgUrl(item.thumbFront ?? item.imageFront);
+					const thumb = imgUrl(frontKey(item));
 					const ownHanger = display === "hanger" && cachedHook(thumb ? new URL(thumb, location.href).href : undefined) === true;
 					return (
 					<button

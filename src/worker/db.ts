@@ -89,6 +89,24 @@ const MIGRATIONS: string[][] = [
 	],
 	// v3: self-hosted background jobs (replaces Cloudflare Workflows)
 	JOB_TABLES,
+	[
+		// v4: AI studio pictures and the daily usage of metered image providers
+		`ALTER TABLE items ADD COLUMN image_studio TEXT`,
+		`ALTER TABLE items ADD COLUMN thumb_studio TEXT`,
+		`ALTER TABLE items ADD COLUMN studio_state TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE items ADD COLUMN studio_error TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE items ADD COLUMN studio_raw TEXT`,
+		`ALTER TABLE items ADD COLUMN studio_input TEXT`,
+		`ALTER TABLE items ADD COLUMN studio_job TEXT`,
+		`ALTER TABLE items ADD COLUMN prefer_original INTEGER NOT NULL DEFAULT 0`,
+		`CREATE TABLE IF NOT EXISTS ai_usage (
+			day TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			neurons INTEGER NOT NULL DEFAULT 0,
+			images INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (day, provider)
+		)`,
+	],
 ];
 
 let migrated: Promise<void> | null = null;
@@ -167,11 +185,20 @@ export interface ItemRow {
 	ai_image?: string | null;
 	user_fields?: string;
 	rotate?: number;
+	image_studio?: string | null;
+	thumb_studio?: string | null;
+	studio_state?: string;
+	studio_error?: string;
+	studio_raw?: string | null;
+	studio_input?: string | null;
+	prefer_original?: number;
 	created_at: string;
 	updated_at: string;
 	wear_count?: number | null;
 	last_worn?: string | null;
 }
+
+const STUDIO_STATES = ["queued", "waiting", "running", "raw", "done", "failed", "off"];
 
 export function rowToItem(r: ItemRow): Item {
 	return {
@@ -205,6 +232,12 @@ export function rowToItem(r: ItemRow): Item {
 		aiError: r.ai_error ?? "",
 		userFields: parseJson<string[]>(r.user_fields, []),
 		rotate: r.rotate ?? 0,
+		imageStudio: r.image_studio ?? null,
+		thumbStudio: r.thumb_studio ?? null,
+		studioState: (STUDIO_STATES.includes(r.studio_state ?? "") ? r.studio_state : "") as Item["studioState"],
+		studioError: r.studio_error ?? "",
+		studioRaw: r.studio_raw ?? null,
+		preferOriginal: r.prefer_original === 1,
 		createdAt: r.created_at,
 		updatedAt: r.updated_at,
 		wearCount: r.wear_count ?? 0,
@@ -240,6 +273,7 @@ export const ITEM_COLUMNS: Record<string, [string, (v: unknown) => unknown]> = {
 	status: ["status", (v) => v],
 	needsReview: ["needs_review", (v) => (v ? 1 : 0)],
 	rotate: ["rotate", (v) => v],
+	preferOriginal: ["prefer_original", (v) => (v ? 1 : 0)],
 };
 
 export const ITEM_SELECT = `SELECT i.*, w.wear_count, w.last_worn FROM items i

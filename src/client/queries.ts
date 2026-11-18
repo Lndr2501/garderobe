@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import type {
+	AiArea,
+	AiProviderPublic,
+	AiRoutePublic,
 	AppSettings,
 	Item,
 	ItemPayload,
@@ -32,8 +35,14 @@ export function useItems() {
 	return useQuery({
 		queryKey: keys.items,
 		queryFn: () => api<Item[]>("/api/items"),
-		// While the server recognizes new pieces, look for results every few seconds.
-		refetchInterval: (q) => (q.state.data?.some((i) => i.aiState === "pending" && Date.now() - Date.parse(i.updatedAt) < 12 * 60_000) ? 4000 : false),
+		// While the server recognizes new pieces or makes studio pictures, look for results every few seconds.
+		refetchInterval: (q) =>
+			q.state.data?.some(
+				(i) =>
+					(i.aiState === "pending" || i.studioState === "queued" || i.studioState === "running") && Date.now() - Date.parse(i.updatedAt) < 12 * 60_000,
+			)
+				? 4000
+				: false,
 	});
 }
 
@@ -126,8 +135,18 @@ export function useSettings() {
 	return useQuery({ queryKey: keys.settings, queryFn: () => api<AppSettings>("/api/settings"), staleTime: 60_000 });
 }
 
+export interface AiProviderPatch extends Partial<Omit<AiProviderPublic, "hasKey" | "keyHint">> {
+	id: string;
+	apiKey?: string;
+	clearKey?: boolean;
+}
+
 export type SettingsPatch = Partial<Omit<AppSettings, "ai">> & {
-	ai?: Partial<AppSettings["ai"]> & { apiKey?: string; clearKey?: boolean };
+	ai?: {
+		providers?: AiProviderPatch[];
+		routes?: Partial<Record<AiArea, Partial<AiRoutePublic>>>;
+		studio?: Partial<Pick<AppSettings["ai"]["studio"], "auto" | "freeOnly" | "steps" | "budget">>;
+	};
 };
 
 export function useSaveSettings() {

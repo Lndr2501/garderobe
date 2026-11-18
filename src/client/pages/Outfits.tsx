@@ -22,7 +22,7 @@ export function Outfits() {
 	const [seed, setSeed] = useState(localDate());
 	const [aiSeed, setAiSeed] = useState(localDate());
 	const [useAi, setUseAi] = useState(true);
-	const aiOn = !!settings?.ai.configured;
+	const aiOn = !!settings?.ai.areas.text;
 	const occ = occasion === "Alltag" ? "" : occasion;
 	// Rule-based ideas are instant; AI ideas load in parallel and appear when ready.
 	const rules = useSuggestions(occ, false, seed);

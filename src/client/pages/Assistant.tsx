@@ -7,6 +7,7 @@ import { PageHead } from "../components/Layout.tsx";
 import { Mascot } from "../components/Mascot.tsx";
 import { errorText } from "../components/Toast.tsx";
 import { prepareImage } from "../lib/image.ts";
+import { frontKey } from "../lib/studio.ts";
 import { useLocal } from "../lib/useLocal.ts";
 import { useItemMap, useSettings, useWeather } from "../queries.ts";
 
@@ -38,7 +39,7 @@ function RichText({ text }: { text: string }) {
 				if (!item) return null;
 				return (
 					<button key={i} className="item-ref" onClick={() => navigate(`/teil/${item.id}`)}>
-						{(item.thumbFront ?? item.imageFront) && <img src={imgUrl(item.thumbFront ?? item.imageFront)} alt="" />}
+						{frontKey(item) && <img src={imgUrl(frontKey(item))} alt="" />}
 						{item.name || "Teil"}
 					</button>
 				);
@@ -58,7 +59,8 @@ export function Assistant() {
 	const abort = useRef<AbortController | null>(null);
 	const endRef = useRef<HTMLDivElement>(null);
 	const fileRef = useRef<HTMLInputElement>(null);
-	const aiOn = !!settings?.ai.configured;
+	const aiOn = !!settings?.ai.areas.text;
+	const visionOn = !!settings?.ai.areas.vision;
 
 	useEffect(() => {
 		endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -171,7 +173,7 @@ export function Assistant() {
 					void send(input);
 				}}
 			>
-				<button type="button" className="icon-btn" aria-label="Foto anhängen" onClick={() => fileRef.current?.click()} disabled={!aiOn}>
+				<button type="button" className="icon-btn" aria-label="Foto anhängen" onClick={() => fileRef.current?.click()} disabled={!aiOn || !visionOn}>
 					<Camera size={18} />
 				</button>
 				<input value={input} onChange={(e) => setInput(e.target.value)} placeholder={aiOn ? "Frag Bügel …" : "KI einrichten, um zu chatten"} disabled={!aiOn} enterKeyHint="send" />

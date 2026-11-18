@@ -85,8 +85,7 @@ function AiTab({ initialIds }: { initialIds: string[] }) {
 	const [busy, setBusy] = useState(false);
 	const [uploading, setUploading] = useState(false);
 	const [view, setView] = useState<TryOn | null>(null);
-	const aiOn = !!settings?.ai.configured;
-	const hasImageModel = !!settings?.ai.imageModel;
+	const aiOn = !!settings?.ai.areas.tryon;
 	const chosen = ids.map((id) => map.get(id)).filter((x): x is Item => !!x);
 
 	const uploadPerson = async (f: File | undefined) => {
@@ -123,13 +122,13 @@ function AiTab({ initialIds }: { initialIds: string[] }) {
 		setView(null);
 	};
 
-	if (settings && (!aiOn || !hasImageModel)) {
+	if (settings && !aiOn) {
 		return (
 			<div className="card stack">
 				<Wand2 size={26} />
 				<b>KI-Anprobe braucht ein Bildmodell</b>
 				<span className="small muted">
-					Trage in den Einstellungen unter „KI“ ein Bildmodell ein, das Bilder bearbeiten kann (z.B. <code>gpt-image-1</code> über <code>/images/edits</code>, oder ein Chat-Modell mit Bildausgabe wie Gemini über OpenRouter im Modus „Chat“).
+					Wähle in den Einstellungen unter „KI“ für „Anprobe“ einen Anbieter mit Bildmodell – z.B. Cloudflare mit FLUX.2 (Gratis-Kontingent), <code>gpt-image-1</code> über <code>/images/edits</code> oder ein Chat-Modell mit Bildausgabe im Modus „Chat“.
 				</span>
 				<Link href="/einstellungen" className="btn primary" style={{ alignSelf: "flex-start" }}>
 					Einstellungen öffnen

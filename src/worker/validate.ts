@@ -102,6 +102,8 @@ export function sanitizeItem(raw: unknown): ItemInput {
 	const nr = bool(raw.needsReview);
 	if (nr !== undefined) out.needsReview = nr;
 	if (raw.rotate === 0 || raw.rotate === 90 || raw.rotate === 180 || raw.rotate === 270) out.rotate = raw.rotate;
+	const po = bool(raw.preferOriginal);
+	if (po !== undefined) out.preferOriginal = po;
 	return out;
 }
 

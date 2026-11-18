@@ -1,28 +1,21 @@
 // Minimal OpenAI-compatible client. Always streams chat completions (some proxies only support
 // stream:true) and also accepts plain JSON responses from providers that ignore `stream`.
 
+/** One area's connection (see aisettings.ts): provider + the model it should use. */
 export interface AiConfig {
+	providerId: string;
+	kind: "openai" | "cloudflare";
+	/** OpenAI-compatible base URL (for Cloudflare: the account's /ai/v1 endpoint). */
 	baseUrl: string;
 	apiKey: string;
+	accountId: string;
 	model: string;
-	visionModel: string;
-	imageModel: string;
-	tryonMode: "edits" | "chat";
+	/** Image areas on OpenAI-style providers: /images/edits or chat with image output. */
+	mode: "edits" | "chat";
 	jsonMode: boolean;
 	/** Let reasoning models think before answering (slower). Off = ask them to answer directly. */
 	reasoning: boolean;
 }
-
-export const EMPTY_AI: AiConfig = {
-	baseUrl: "",
-	apiKey: "",
-	model: "",
-	visionModel: "",
-	imageModel: "",
-	tryonMode: "edits",
-	jsonMode: false,
-	reasoning: false,
-};
 
 /** Providers that rejected the thinking switch – don't send it to them again (per isolate). */
 const NO_THINK_UNSUPPORTED = new Set<string>();
@@ -59,7 +52,7 @@ export function normalizeBaseUrl(raw: string): string {
 }
 
 export function aiConfigured(cfg: AiConfig): boolean {
-	return !!cfg.baseUrl && !!cfg.model;
+	return !!cfg.baseUrl && !!cfg.model && (cfg.kind !== "cloudflare" || !!cfg.apiKey);
 }
 
 function headers(cfg: AiConfig, json = true): Record<string, string> {
@@ -74,8 +67,17 @@ async function errorFrom(res: Response): Promise<AiError> {
 	try {
 		const text = await res.text();
 		try {
-			const j = JSON.parse(text) as { error?: { message?: string } | string; message?: string };
-			detail = typeof j.error === "string" ? j.error : (j.error?.message ?? j.message ?? text);
+			const j = JSON.parse(text) as {
+				error?: { message?: string } | string;
+				message?: string;
+				errors?: { code?: number; message?: string }[];
+			};
+			const cf = j.errors?.[0];
+			detail = cf
+				? `${cf.code ?? ""} ${cf.message ?? ""}`.trim()
+				: typeof j.error === "string"
+					? j.error
+					: (j.error?.message ?? j.message ?? text);
 		} catch {
 			detail = text;
 		}
@@ -83,6 +85,7 @@ async function errorFrom(res: Response): Promise<AiError> {
 		/* ignore */
 	}
 	detail = detail.slice(0, 300);
+	if (/\b4006\b|daily free allocation/i.test(detail)) return new AiError(`Tageskontingent aufgebraucht. ${detail}`, 429);
 	if (res.status === 401 || res.status === 403) return new AiError(`KI-Anbieter: Zugriff verweigert (API-Key prüfen). ${detail}`, 502);
 	if (res.status === 404) return new AiError(`KI-Anbieter: Endpunkt oder Modell nicht gefunden. ${detail}`, 502);
 	if (res.status === 429) return new AiError(`KI-Anbieter: Limit erreicht, später nochmal versuchen. ${detail}`, 502);
@@ -293,11 +296,24 @@ export function extractJson<T>(text: string): T {
 }
 
 export async function listModels(cfg: AiConfig): Promise<string[]> {
-	if (!cfg.baseUrl) throw new AiError("Keine Base-URL gesetzt.", 400);
+	if (!cfg.baseUrl) throw new AiError(cfg.kind === "cloudflare" ? "Keine Account-ID gesetzt." : "Keine Base-URL gesetzt.", 400);
+	if (cfg.kind === "cloudflare") return listCloudflareModels(cfg);
 	const res = await fetch(`${cfg.baseUrl}/models`, { headers: headers(cfg, false) });
 	if (!res.ok) throw await errorFrom(res);
 	const j = (await res.json()) as { data?: { id: string }[] };
 	return (j.data ?? []).map((m) => m.id).sort();
+}
+
+async function listCloudflareModels(cfg: AiConfig): Promise<string[]> {
+	const out: string[] = [];
+	for (const task of ["Text Generation", "Text-to-Image"]) {
+		const url = `https://api.cloudflare.com/client/v4/accounts/${cfg.accountId}/ai/models/search?per_page=100&task=${encodeURIComponent(task)}`;
+		const res = await fetch(url, { headers: headers(cfg, false) });
+		if (!res.ok) throw await errorFrom(res);
+		const j = (await res.json()) as { result?: { name: string }[] };
+		out.push(...(j.result ?? []).map((m) => m.name));
+	}
+	return out.sort();
 }
 
 export interface ImageInput {
@@ -308,9 +324,9 @@ export interface ImageInput {
 
 /** OpenAI-style /images/edits with one or more input images. Returns PNG/WebP bytes. */
 export async function imageEdit(cfg: AiConfig, prompt: string, images: ImageInput[]): Promise<{ data: ArrayBuffer; type: string }> {
-	if (!cfg.baseUrl || !cfg.imageModel) throw new AiError("Kein Bild-Modell eingerichtet (Einstellungen → KI).", 400);
+	if (!cfg.baseUrl || !cfg.model) throw new AiError("Kein Bild-Modell eingerichtet (Einstellungen → KI).", 400);
 	const form = new FormData();
-	form.append("model", cfg.imageModel);
+	form.append("model", cfg.model);
 	form.append("prompt", prompt);
 	form.append("n", "1");
 	for (const img of images) {
@@ -332,7 +348,7 @@ export async function imageEdit(cfg: AiConfig, prompt: string, images: ImageInpu
 
 /** Chat completion with image output (e.g. OpenRouter `modalities: ["image","text"]`). */
 export async function imageViaChat(cfg: AiConfig, prompt: string, images: ImageInput[]): Promise<{ data: ArrayBuffer; type: string }> {
-	if (!cfg.baseUrl || !cfg.imageModel) throw new AiError("Kein Bild-Modell eingerichtet (Einstellungen → KI).", 400);
+	if (!cfg.baseUrl || !cfg.model) throw new AiError("Kein Bild-Modell eingerichtet (Einstellungen → KI).", 400);
 	const content: ChatContent = [
 		{ type: "text", text: prompt },
 		...images.map((img) => ({ type: "image_url" as const, image_url: { url: bufferToDataUrl(img.data, img.type) } })),
@@ -343,7 +359,7 @@ export async function imageViaChat(cfg: AiConfig, prompt: string, images: ImageI
 			method: "POST",
 			headers: headers(cfg),
 			body: JSON.stringify({
-				model: cfg.imageModel,
+				model: cfg.model,
 				messages: [{ role: "user", content }],
 				modalities: ["image", "text"],
 				stream: false,
@@ -372,6 +388,60 @@ export async function imageViaChat(cfg: AiConfig, prompt: string, images: ImageI
 		return { data: base64ToBuffer(m[2]!), type: m[1]! };
 	}
 	return fetchImage(url);
+}
+
+export interface ImageSize {
+	width: number;
+	height: number;
+	/** Diffusion steps (Cloudflare FLUX only). */
+	steps?: number;
+}
+
+/**
+ * Cloudflare Workers AI (FLUX.2): multipart form with up to 4 reference images.
+ * Error 4006 = the daily free allowance is used up (status 429 here).
+ */
+export async function imageCloudflare(cfg: AiConfig, prompt: string, images: ImageInput[], size: ImageSize): Promise<{ data: ArrayBuffer; type: string }> {
+	if (!cfg.accountId || !cfg.apiKey || !cfg.model) throw new AiError("Cloudflare ist nicht vollständig eingerichtet (Account-ID, Token, Modell).", 400);
+	const form = new FormData();
+	form.append("prompt", prompt);
+	form.append("width", String(size.width));
+	form.append("height", String(size.height));
+	if (size.steps) form.append("steps", String(size.steps));
+	images.slice(0, 4).forEach((img, i) => form.append(`input_image_${i}`, new File([new Uint8Array(img.data)], img.name, { type: img.type })));
+	const model = cfg.model.trim();
+	if (!/^@?[a-z0-9][\w.-]*(\/[\w.-]+)*$/i.test(model)) throw new AiError(`Ungültiger Modellname: ${model}`, 400);
+	let res: Response;
+	try {
+		res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfg.accountId}/ai/run/${model}`, {
+			method: "POST",
+			headers: headers(cfg, false),
+			body: form,
+		});
+	} catch (err) {
+		throw new AiError(`Cloudflare nicht erreichbar: ${(err as Error).message}`);
+	}
+	if (!res.ok) throw await errorFrom(res);
+	const type = res.headers.get("content-type") ?? "";
+	if (type.startsWith("image/")) return { data: await res.arrayBuffer(), type };
+	const j = (await res.json()) as { result?: { image?: string }; image?: string };
+	const b64 = j.result?.image ?? j.image;
+	if (!b64) throw new AiError("Cloudflare hat kein Bild geliefert.");
+	const bytes = base64ToBuffer(b64);
+	return { data: bytes, type: sniffImageType(new Uint8Array(bytes)) };
+}
+
+/** Picks the right image API for the area's provider. */
+export function generateImage(cfg: AiConfig, prompt: string, images: ImageInput[], size: ImageSize): Promise<{ data: ArrayBuffer; type: string }> {
+	if (cfg.kind === "cloudflare") return imageCloudflare(cfg, prompt, images, size);
+	return cfg.mode === "chat" ? imageViaChat(cfg, prompt, images) : imageEdit(cfg, prompt, images);
+}
+
+function sniffImageType(b: Uint8Array): string {
+	if (b[0] === 0x89 && b[1] === 0x50) return "image/png";
+	if (b[0] === 0xff && b[1] === 0xd8) return "image/jpeg";
+	if (b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return "image/webp";
+	return "image/png";
 }
 
 async function fetchImage(url: string): Promise<{ data: ArrayBuffer; type: string }> {

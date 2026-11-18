@@ -2,8 +2,8 @@
 import { createServer } from "node:http";
 
 const PORT = Number(process.env.MOCK_AI_PORT ?? 8799);
-const PNG =
-	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+/** 16×16 red piece on a transparent background (so the app skips its background removal). */
+const CUTOUT = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAG0lEQVR42mNgGH7ghIbGf3x41IBRA+hjwNADAJelpzGqgYqDAAAAAElFTkSuQmCC";
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
 
 function text(content) {
@@ -42,7 +42,7 @@ createServer(async (req, res) => {
 	}
 	if (path === "/v1/images/edits") {
 		res.writeHead(200, { "Content-Type": "application/json" });
-		return res.end(JSON.stringify({ data: [{ b64_json: PNG }] }));
+		return res.end(JSON.stringify({ data: [{ b64_json: CUTOUT }] }));
 	}
 	if (path === "/v1/chat/completions") {
 		const body = JSON.parse(raw.toString() || "{}");

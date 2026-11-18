@@ -34,6 +34,16 @@ export interface Item {
 	userFields: string[];
 	/** Clockwise rotation (deg) the client still has to apply to the photos. */
 	rotate: number;
+	/** AI studio picture (background removed) made from the front photo. */
+	imageStudio: string | null;
+	thumbStudio: string | null;
+	/** queued/waiting/running: in the works; raw: generated, the app still removes the background; off: removed by hand. */
+	studioState: StudioState;
+	studioError: string;
+	/** Generated picture that still needs its background removed (state "raw"). */
+	studioRaw: string | null;
+	/** Show the own photo even though a studio picture exists. */
+	preferOriginal: boolean;
 	createdAt: string;
 	updatedAt: string;
 	/** Derived from the wear log. */
@@ -41,8 +51,25 @@ export interface Item {
 	lastWorn: string | null;
 }
 
+export type StudioState = "" | "queued" | "waiting" | "running" | "raw" | "done" | "failed" | "off";
+
 export type ItemInput = Partial<
-	Omit<Item, "id" | "createdAt" | "updatedAt" | "wearCount" | "lastWorn" | "aiState" | "aiError" | "userFields">
+	Omit<
+		Item,
+		| "id"
+		| "createdAt"
+		| "updatedAt"
+		| "wearCount"
+		| "lastWorn"
+		| "aiState"
+		| "aiError"
+		| "userFields"
+		| "imageStudio"
+		| "thumbStudio"
+		| "studioState"
+		| "studioError"
+		| "studioRaw"
+	>
 >;
 
 /** What the client sends when creating/updating an item. */
@@ -113,16 +140,45 @@ export interface TryOn {
 	createdAt: string;
 }
 
-export interface AiSettingsPublic {
+/** text: chat, outfits, shopping, packing · vision: photo recognition · studio: studio pictures · tryon: try-on. */
+export type AiArea = "text" | "vision" | "studio" | "tryon";
+export type AiProviderKind = "openai" | "cloudflare";
+
+export interface AiProviderPublic {
+	id: string;
+	name: string;
+	kind: AiProviderKind;
 	baseUrl: string;
-	model: string;
-	visionModel: string;
-	imageModel: string;
-	tryonMode: "edits" | "chat";
+	accountId: string;
 	jsonMode: boolean;
 	reasoning: boolean;
 	hasKey: boolean;
 	keyHint: string;
+}
+
+export interface AiRoutePublic {
+	provider: string;
+	model: string;
+	mode: "edits" | "chat";
+}
+
+export interface AiSettingsPublic {
+	providers: AiProviderPublic[];
+	routes: Record<AiArea, AiRoutePublic>;
+	studio: {
+		auto: boolean;
+		freeOnly: boolean;
+		steps: number;
+		budget: number;
+		/** Estimated neurons used today (Cloudflare) and pictures made today. */
+		usedToday: number;
+		imagesToday: number;
+		/** The studio provider counts against a daily allowance (Cloudflare). */
+		metered: boolean;
+	};
+	/** Which areas are ready to use. */
+	areas: Record<AiArea, boolean>;
+	/** Texts (chat, outfits …) are set up. */
 	configured: boolean;
 }
 

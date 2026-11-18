@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { Item } from "../../shared/types.ts";
 import { imgUrl } from "../api.ts";
+import { frontKey } from "../lib/studio.ts";
 
 type Box = { left: number; top: number; width: number; height: number; z: number };
 
@@ -63,7 +64,7 @@ export function Holo({ items }: { items: Item[] }) {
 				</svg>
 				{items.map((item) => {
 					const a = ANCHORS[item.category] ?? ANCHORS.other!;
-					const key = item.imageFront ?? item.thumbFront;
+					const key = frontKey(item, "full");
 					if (!key) return null;
 					return (
 						<img

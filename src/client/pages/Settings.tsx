@@ -1,8 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Bot, CheckCircle2, Download, KeyRound, LocateFixed, LogOut, MapPin, Sparkles, Trash2, User, Wand2, XCircle } from "lucide-react";
+import { Download, KeyRound, LocateFixed, LogOut, MapPin, Sparkles, Trash2, User } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import type { AppSettings } from "../../shared/types.ts";
 import { api } from "../api.ts";
+import { AiSettings } from "../components/AiSettings.tsx";
 import { Segmented, Switch } from "../components/Inputs.tsx";
 import { PageHead } from "../components/Layout.tsx";
 import { errorText, useToast } from "../components/Toast.tsx";
@@ -10,13 +11,6 @@ import { plural } from "../lib/format.ts";
 import { itemsToOptimize, optimizeItem } from "../lib/optimize.ts";
 import { searchPlaces, type Place } from "../lib/weather.ts";
 import { useItems, useSaveSettings, useSettings, type SettingsPatch } from "../queries.ts";
-
-const PRESETS = [
-	{ label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4.1-mini", imageModel: "gpt-image-1", tryonMode: "edits" as const },
-	{ label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-4.1-mini", imageModel: "google/gemini-2.5-flash-image", tryonMode: "chat" as const },
-	{ label: "Ollama", baseUrl: "http://localhost:11434/v1", model: "llama3.2-vision", imageModel: "", tryonMode: "edits" as const },
-	{ label: "LM Studio", baseUrl: "http://localhost:1234/v1", model: "", imageModel: "", tryonMode: "edits" as const },
-];
 
 function Section({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
 	return (
@@ -37,7 +31,7 @@ export function SettingsPage() {
 		<div className="container page" style={{ maxWidth: 820 }}>
 			<PageHead title="Einstellungen" />
 			<General settings={settings} />
-			<AiSection settings={settings} />
+			<AiSettings settings={settings} />
 			<PasswordSection />
 			<DataSection />
 		</div>
@@ -141,196 +135,6 @@ function General({ settings }: { settings: AppSettings }) {
 						value={settings.bgRemoval.quality}
 						onChange={(v) => patch({ bgRemoval: { ...settings.bgRemoval, quality: v } })}
 					/>
-				</div>
-			)}
-		</Section>
-	);
-}
-
-interface TestResult {
-	ok: boolean;
-	models?: string[];
-	reply?: string;
-	error?: string;
-	modelsError?: string;
-	ms?: number;
-}
-
-function AiSection({ settings }: { settings: AppSettings }) {
-	const ai = settings.ai;
-	const save = useSaveSettings();
-	const toast = useToast();
-	const [baseUrl, setBaseUrl] = useState(ai.baseUrl);
-	const [apiKey, setApiKey] = useState("");
-	const [model, setModel] = useState(ai.model);
-	const [visionModel, setVisionModel] = useState(ai.visionModel);
-	const [imageModel, setImageModel] = useState(ai.imageModel);
-	const [tryonMode, setTryonMode] = useState(ai.tryonMode);
-	const [jsonMode, setJsonMode] = useState(ai.jsonMode);
-	const [reasoning, setReasoning] = useState(ai.reasoning ?? false);
-	const [models, setModels] = useState<string[]>([]);
-	const [test, setTest] = useState<TestResult | null>(null);
-	const [testing, setTesting] = useState(false);
-
-	const dirty =
-		baseUrl !== ai.baseUrl || !!apiKey || model !== ai.model || visionModel !== ai.visionModel || imageModel !== ai.imageModel || tryonMode !== ai.tryonMode || jsonMode !== ai.jsonMode || reasoning !== (ai.reasoning ?? false);
-
-	const persist = async () => {
-		const s = await save.mutateAsync({ ai: { baseUrl, model, visionModel, imageModel, tryonMode, jsonMode, reasoning, ...(apiKey ? { apiKey } : {}) } });
-		setApiKey("");
-		setBaseUrl(s.ai.baseUrl);
-		return s;
-	};
-
-	const runTest = async () => {
-		setTesting(true);
-		setTest(null);
-		try {
-			if (dirty) await persist();
-			const r = await api<TestResult>("/api/ai/test", { method: "POST", body: {} });
-			setTest(r);
-			if (r.models?.length) setModels(r.models);
-		} catch (e) {
-			setTest({ ok: false, error: errorText(e) });
-		} finally {
-			setTesting(false);
-		}
-	};
-
-	return (
-		<Section icon={<Bot size={20} />} title="KI-Schnittstelle">
-			<p className="small muted" style={{ margin: 0 }}>
-				Jede OpenAI-kompatible API funktioniert: OpenAI, OpenRouter, Groq, Mistral, Ollama, LM Studio, LiteLLM, vLLM … Der Schlüssel bleibt auf dem Server und wird nie wieder angezeigt.
-			</p>
-			<div className="chips">
-				{PRESETS.map((p) => (
-					<button
-						key={p.label}
-						className="chip"
-						type="button"
-						onClick={() => {
-							setBaseUrl(p.baseUrl);
-							if (p.model) setModel(p.model);
-							setImageModel(p.imageModel);
-							setTryonMode(p.tryonMode);
-						}}
-					>
-						{p.label}
-					</button>
-				))}
-			</div>
-			<label className="field">
-				<span>Base-URL</span>
-				<input className="input" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.openai.com/v1" inputMode="url" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
-			</label>
-			<label className="field">
-				<span>
-					API-Key {ai.hasKey && <span className="badge ok">gespeichert {ai.keyHint}</span>}
-				</span>
-				<div className="row">
-					<input
-						className="input"
-						type="password"
-						value={apiKey}
-						onChange={(e) => setApiKey(e.target.value)}
-						placeholder={ai.hasKey ? "Neuen Key eingeben, um zu ersetzen" : "sk-…  (für lokale Server leer lassen)"}
-						autoComplete="off"
-						autoCapitalize="off"
-						spellCheck={false}
-					/>
-					{ai.hasKey && (
-						<button
-							className="btn ghost"
-							type="button"
-							aria-label="Key löschen"
-							onClick={() => save.mutate({ ai: { clearKey: true } }, { onSuccess: () => toast("Key gelöscht", "ok") })}
-						>
-							<Trash2 size={16} />
-						</button>
-					)}
-				</div>
-			</label>
-			<datalist id="ai-models">
-				{models.map((m) => (
-					<option key={m} value={m} />
-				))}
-			</datalist>
-			<div className="grid grid-2">
-				<label className="field">
-					<span>Text-Modell</span>
-					<input className="input" list="ai-models" value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-4.1-mini" autoCapitalize="off" spellCheck={false} />
-				</label>
-				<label className="field">
-					<span>Vision-Modell (optional)</span>
-					<input className="input" list="ai-models" value={visionModel} onChange={(e) => setVisionModel(e.target.value)} placeholder="= Text-Modell" autoCapitalize="off" spellCheck={false} />
-				</label>
-			</div>
-			<label className="field">
-				<span>
-					<Wand2 size={13} /> Bildmodell für KI-Anprobe (optional)
-				</span>
-				<input className="input" list="ai-models" value={imageModel} onChange={(e) => setImageModel(e.target.value)} placeholder="gpt-image-1" autoCapitalize="off" spellCheck={false} />
-			</label>
-			<div className="row between wrap">
-				<span className="small">
-					Anprobe-Modus
-					<div className="tiny muted">„Edits“ = /images/edits, „Chat“ = Chat-Modell mit Bildausgabe</div>
-				</span>
-				<Segmented
-					options={[
-						{ key: "edits", label: "Edits" },
-						{ key: "chat", label: "Chat" },
-					]}
-					value={tryonMode}
-					onChange={setTryonMode}
-				/>
-			</div>
-			<div className="row between">
-				<span className="small">
-					JSON-Modus erzwingen
-					<div className="tiny muted">Ausschalten, falls dein Anbieter <code>response_format</code> nicht kennt.</div>
-				</span>
-				<Switch label="JSON-Modus" on={jsonMode} onChange={setJsonMode} />
-			</div>
-			<div className="row between">
-				<span className="small">
-					KI darf „nachdenken“
-					<div className="tiny muted">Aus = schnellere Antworten. Nur bei Denk-Modellen (Qwen3, DeepSeek R1 …) relevant.</div>
-				</span>
-				<Switch label="Nachdenken" on={reasoning} onChange={setReasoning} />
-			</div>
-			<div className="row wrap">
-				<button
-					className="btn primary"
-					disabled={!dirty || save.isPending}
-					onClick={() =>
-						void persist().then(
-							() => toast("KI-Einstellungen gespeichert", "ok"),
-							(e: unknown) => toast(errorText(e), "error"),
-						)
-					}
-				>
-					Speichern
-				</button>
-				<button className="btn" onClick={() => void runTest()} disabled={testing || (!baseUrl && !ai.baseUrl)}>
-					{testing ? <span className="spinner" /> : <Sparkles size={16} />} Verbindung testen
-				</button>
-			</div>
-			{test && (
-				<div className="card flat tight stack" style={{ gap: 6 }}>
-					<div className="row" style={{ gap: 6 }}>
-						{test.ok ? <CheckCircle2 size={18} color="var(--ok)" /> : <XCircle size={18} color="var(--danger)" />}
-						<b>{test.ok ? "Verbindung klappt" : "Verbindung fehlgeschlagen"}</b>
-					</div>
-					{test.reply && (
-						<div className="small">
-							Antwort: „{test.reply}“{test.ms !== undefined ? ` nach ${(test.ms / 1000).toFixed(1).replace(".", ",")} s` : ""}
-							{test.ms !== undefined && test.ms > 15000 ? " – ziemlich langsam, die App wartet deshalb nirgends auf die KI." : ""}
-						</div>
-					)}
-					{test.error && <div className="small" style={{ color: "var(--danger)" }}>{test.error}</div>}
-					{test.models && <div className="tiny muted">{test.models.length} Modelle gefunden – sie werden jetzt in den Feldern vorgeschlagen.</div>}
-					{test.modelsError && <div className="tiny muted">Modell-Liste nicht verfügbar: {test.modelsError}</div>}
 				</div>
 			)}
 		</Section>
@@ -455,7 +259,7 @@ function DataSection() {
 					<LogOut size={16} /> Abmelden
 				</button>
 			</div>
-			<div className="tiny muted">Garderobe · Bilder und Daten liegen in deinem eigenen Cloudflare-Konto.</div>
+			<div className="tiny muted">Garderobe · Bilder und Daten liegen auf deinem eigenen Server.</div>
 		</Section>
 	);
 }

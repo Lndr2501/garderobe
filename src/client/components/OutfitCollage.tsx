@@ -1,5 +1,6 @@
 import type { Item } from "../../shared/types.ts";
 import { imgUrl } from "../api.ts";
+import { frontKey } from "../lib/studio.ts";
 
 type Box = { left: number; top: number; width: number; height: number; z: number };
 
@@ -52,7 +53,7 @@ export function OutfitCollage({ items, className = "" }: { items: Item[]; classN
 		<div className={`collage ${className}`}>
 			{items.map((item, i) => {
 				const box = boxes[i]!;
-				const key = item.thumbFront ?? item.imageFront;
+				const key = frontKey(item);
 				if (!key) return null;
 				return (
 					<img

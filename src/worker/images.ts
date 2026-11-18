@@ -21,7 +21,7 @@ export function newImageKey(type: string, prefix = "img"): string {
 }
 
 export function isValidKey(key: string): boolean {
-	return /^(img|tryon|person)\/[0-9a-f-]{36}\.(webp|png|jpg|avif|gif)$/.test(key);
+	return /^(img|tryon|person|studio)\/[0-9a-f-]{36}\.(webp|png|jpg|avif|gif)$/.test(key);
 }
 
 export async function putImage(env: ImageEnv, key: string, data: ArrayBuffer | Uint8Array, type: string): Promise<void> {

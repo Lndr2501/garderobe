@@ -11,7 +11,8 @@ OpenAI-kompatible KI-Schnittstelle.
 - **Fotos**: Kamera, Mediathek, Drag & Drop, Einfügen. Hintergrund wird im Browser entfernt (`@imgly/background-removal`), Ränder werden geglättet und Krümel entfernt, dunkle Fotos automatisch aufgehellt. Vorder- und Rückseite möglich.
 - **Bild bearbeiten**: Radierer für Bügel, Hände und Reste, „Foto verbessern“, „Ränder glätten“. In den Einstellungen optimiert „Bilder optimieren“ alle vorhandenen Teile auf einmal.
 - **Bildformat**: WebP (auf Safari per WASM-Encoder `@jsquash/webp`), Vollbild 1400 px, Vorschau 640 px.
-- **KI** (optional, jede OpenAI-kompatible API): erkennt Name, Kategorie, Farbe und Material, schlägt Outfits vor, Chat-Assistent „Bügel“, Packlisten, Shopping-Check, virtuelle Anprobe (`/images/edits` oder Chat mit Bildausgabe).
+- **KI** (optional, jede OpenAI-kompatible API und Cloudflare Workers AI): erkennt Name, Kategorie, Farbe und Material, schlägt Outfits vor, Chat-Assistent „Bügel“, Packlisten, Shopping-Check, virtuelle Anprobe. Für jeden Bereich (Texte, Erkennung, Studio-Bild, Anprobe) lässt sich ein eigener Anbieter und ein eigenes Modell wählen.
+- **Studio-Bild**: Aus dem eigenen Foto malt ein Bildmodell (z.B. FLUX.2 auf Cloudflare) ein sauberes Produktfoto mit Volumen („Ghost Mannequin“). Die App stellt es frei und zeigt es auf der Detailseite in 3D (Neigen per Maus oder Handy-Sensor). Auf Cloudflare bleibt die App im Gratis-Kontingent und wartet sonst bis zum nächsten Tag.
 - **Ohne KI** laufen alle Vorschläge regelbasiert (Wetter, Farbharmonie, Tragehistorie).
 - **Outfits**: Tagesvorschläge nach Wetter (Open-Meteo), Baukasten mit Zufall und Sperren, Avatar-Ansicht.
 - **Getragen**: „Anziehen“ im Schrank oder „Heute getragen“ beim Teil; fliesst in Statistik und Vorschläge ein (kein eigener Kalender mehr).
@@ -26,7 +27,7 @@ OpenAI-kompatible KI-Schnittstelle.
 | Backend | Node.js 24 (Hono), SQLite (`node:sqlite`), Bilder als Dateien, eigene Job-Warteschlange für die KI |
 | Betrieb | Ein Docker-Container, alle Daten in `/data` (`garderobe.db` + `images/`) |
 | Auth | Ein App-Passwort (PBKDF2), signiertes Session-Cookie (365 Tage), Login-Drossel, Origin-Prüfung |
-| KI | `src/worker/ai.ts`: Streaming (SSE) und JSON, `<think>`-Filter, `/models`, `/images/edits` |
+| KI | `src/worker/ai.ts`: Streaming (SSE) und JSON, `<think>`-Filter, `/models`, `/images/edits`, Workers AI · `aisettings.ts`: Anbieter pro Bereich · `studio.ts`: Studio-Bild-Job mit Tagesbudget |
 
 Das Datenbankschema migriert sich beim ersten Request selbst (`src/worker/db.ts`).
 
@@ -63,6 +64,11 @@ auf dem iPhone nicht. Backup = den Ordner `/data` sichern.
 
 ## KI einrichten
 
-In der App unter **Einstellungen → KI-Schnittstelle**: Base-URL, API-Key, Text-Modell (optional Vision-
-und Bildmodell) eintragen und „Verbindung testen“ drücken. Der Key bleibt auf dem Server.
-Voreinstellungen für OpenAI, OpenRouter, Ollama und LM Studio sind eingebaut.
+In der App unter **Einstellungen → KI**:
+
+1. Anbieter hinzufügen (Voreinstellungen: Cloudflare, OpenAI, OpenRouter, Ollama, LM Studio, eigener) und „Testen“ drücken.
+2. Unter „Wer macht was?“ für Texte, Erkennung, Studio-Bild und Anprobe je Anbieter und Modell wählen.
+3. Cloudflare braucht die Account-ID und ein API-Token mit „Workers AI“-Recht. FLUX.2 kostet pro Bild
+   etwa 3 000–7 500 Neuronen (je nach Qualität); der Free-Plan hat 10 000 pro Tag.
+
+Schlüssel bleiben auf dem Server und werden nie wieder angezeigt.

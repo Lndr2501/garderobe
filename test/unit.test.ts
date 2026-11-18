@@ -1,7 +1,21 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { colorHarmony, packingList, seededRandom, suggestOutfits, targetWarmth } from "../src/shared/rules.ts";
 import type { Item } from "../src/shared/types.ts";
-import { chatText, EMPTY_AI, extractJson, normalizeBaseUrl, ThinkFilter } from "../src/worker/ai.ts";
+import { chatText, extractJson, normalizeBaseUrl, ThinkFilter, type AiConfig } from "../src/worker/ai.ts";
+import { applyAiPatch, configFor, emptyStore, migrateLegacy, msUntilNextUtcDay } from "../src/worker/aisettings.ts";
+import { fluxNeurons, imageDims } from "../src/worker/studio.ts";
+
+const EMPTY_AI: AiConfig = {
+	providerId: "",
+	kind: "openai",
+	baseUrl: "",
+	apiKey: "",
+	accountId: "",
+	model: "",
+	mode: "edits",
+	jsonMode: false,
+	reasoning: false,
+};
 import { rotationFor } from "../src/worker/tagging.ts";
 
 function item(p: Partial<Item>): Item {
@@ -36,6 +50,12 @@ function item(p: Partial<Item>): Item {
 		aiError: "",
 		userFields: [],
 		rotate: 0,
+		imageStudio: null,
+		thumbStudio: null,
+		studioState: "",
+		studioError: "",
+		studioRaw: null,
+		preferOriginal: false,
 		createdAt: "",
 		updatedAt: "",
 		wearCount: 0,
@@ -164,5 +184,50 @@ describe("upright rotation from the AI anchor", () => {
 		expect(rotationFor("bag", "links")).toBe(0);
 		expect(rotationFor("top", "quer")).toBe(0);
 		expect(rotationFor(undefined, "links")).toBe(0);
+	});
+});
+
+describe("AI areas", () => {
+	it("migrates the old single config", () => {
+		const s = migrateLegacy({ baseUrl: "https://api.openai.com/v1", apiKey: "k", model: "gpt", imageModel: "img", tryonMode: "chat" });
+		expect(s.providers).toHaveLength(1);
+		expect(s.providers[0]!.name).toBe("OpenAI");
+		expect(s.routes.vision).toMatchObject({ provider: "p1", model: "gpt" });
+		expect(configFor(s, "tryon")).toMatchObject({ model: "img", mode: "chat", baseUrl: "https://api.openai.com/v1", apiKey: "k" });
+		expect(configFor(s, "studio").baseUrl).toBe("");
+		expect(migrateLegacy({}).providers).toEqual([]);
+	});
+
+	it("keeps keys when providers are re-sent without them, and builds the Cloudflare URL", () => {
+		let s = applyAiPatch(emptyStore(), {
+			providers: [{ id: "cf", kind: "cloudflare", accountId: "0123456789abcdef0123456789abcdef", apiKey: "tok" }],
+			routes: { studio: { provider: "cf", model: "@cf/x" } },
+		});
+		s = applyAiPatch(s, { providers: [{ id: "cf", kind: "cloudflare", name: "Mein CF" }] });
+		expect(s.providers[0]).toMatchObject({ name: "Mein CF", apiKey: "tok", accountId: "0123456789abcdef0123456789abcdef" });
+		expect(configFor(s, "studio").baseUrl).toBe("https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/v1");
+		expect(applyAiPatch(s, { studio: { steps: 33, budget: 5 } }).studio).toMatchObject({ steps: 28, budget: 9000 });
+	});
+});
+
+describe("studio cost", () => {
+	it("matches the measured Workers AI usage", () => {
+		// 768×1024 output with a 512² reference at 50 steps was billed with ~6 560 neurons.
+		expect(fluxNeurons([{ w: 512, h: 512 }], { w: 768, h: 1024 }, 50)).toBeGreaterThan(6400);
+		expect(fluxNeurons([{ w: 512, h: 512 }], { w: 768, h: 1024 }, 50)).toBeLessThan(6700);
+		expect(fluxNeurons([{ w: 768, h: 1024 }], { w: 768, h: 1024 }, 28)).toBeLessThan(5000);
+	});
+
+	it("reads image sizes from headers", () => {
+		const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
+		expect(imageDims(png)).toEqual({ w: 1, h: 1 });
+		const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xc0, 0, 17, 8, 0x03, 0x00, 0x02, 0x40, 3, 0, 0, 0, 0]);
+		expect(imageDims(jpeg)).toEqual({ w: 576, h: 768 });
+		expect(imageDims(new Uint8Array([1, 2, 3]))).toBeNull();
+	});
+
+	it("waits until just after midnight UTC", () => {
+		const t = Date.UTC(2026, 10, 18, 23, 0);
+		expect(msUntilNextUtcDay(t)).toBe(62 * 60_000);
 	});
 });

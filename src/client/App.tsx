@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { Route, Switch } from "wouter";
 import { useRotationFixups } from "./lib/recognize.ts";
+import { useStudioWork } from "./lib/studio.ts";
 import { api, UNAUTHORIZED_EVENT } from "./api.ts";
 import { Layout } from "./components/Layout.tsx";
 import { Mascot } from "./components/Mascot.tsx";
@@ -58,6 +59,7 @@ export function App() {
 
 function Routes() {
 	useRotationFixups();
+	useStudioWork();
 	return (
 		<Layout>
 			<Switch>

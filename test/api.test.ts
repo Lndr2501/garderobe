@@ -2,6 +2,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { MemoryBlobStore } from "../src/server/files.ts";
 import { SqliteDb } from "../src/server/sqlite.ts";
 import app, { type Bindings } from "../src/worker/index.ts";
+import { JobRunner } from "../src/worker/jobs.ts";
+import { runStudioJob, type StudioParams } from "../src/worker/studio.ts";
 import { applyTags, type TagParams } from "../src/worker/tagging.ts";
 import type { AppSettings, Item, ShoppingCheckResult, Stats, Trip, WearDay } from "../src/shared/types.ts";
 
@@ -20,6 +22,9 @@ const env: Bindings = {
 		},
 	},
 };
+/** Studio pictures run through the real job runner. */
+const studioRunner = new JobRunner(env.DB);
+env.STUDIO = studioRunner.register<StudioParams>("studio", (params, step) => runStudioJob(env, params, step));
 const PW = "super-geheim-123";
 
 class Client {
@@ -80,7 +85,9 @@ beforeAll(async () => {
 beforeEach(async () => {
 	// Storage persists across tests in this pool, so wipe app data (but keep the schema).
 	await env.DB.batch(
-		["items", "outfits", "wears", "trips", "tryons", "settings", "login_attempts"].map((t) => env.DB.prepare(`DELETE FROM ${t}`)),
+		["items", "outfits", "wears", "trips", "tryons", "settings", "login_attempts", "ai_usage", "jobs", "job_steps"].map((t) =>
+			env.DB.prepare(`DELETE FROM ${t}`),
+		),
 	);
 	await env.DB.prepare(`DELETE FROM meta WHERE key != 'schema_version'`).run();
 	for (const k of await env.IMAGES.list()) await env.IMAGES.delete(k.key);
@@ -224,10 +231,136 @@ describe("settings", () => {
 		expect(text).not.toContain("sk-test");
 		const s = JSON.parse(text) as AppSettings;
 		expect(s).toMatchObject({ name: "Lndr", currency: "CHF" });
-		expect(s.ai).toMatchObject({ baseUrl: "https://llm.example/v1", model: "m-1", hasKey: true, keyHint: "…abcd", configured: true });
+		expect(s.ai.providers).toEqual([expect.objectContaining({ id: "p1", baseUrl: "https://llm.example/v1", hasKey: true, keyHint: "…abcd" })]);
+		expect(s.ai.routes.text).toMatchObject({ provider: "p1", model: "m-1" });
+		expect(s.ai.areas).toEqual({ text: true, vision: true, studio: false, tryon: false });
+		expect(s.ai.configured).toBe(true);
 
 		const cleared = await c.json<AppSettings>("/api/settings", { method: "PATCH", body: { ai: { clearKey: true } } });
-		expect(cleared.ai.hasKey).toBe(false);
+		expect(cleared.ai.providers[0]!.hasKey).toBe(false);
+	});
+
+	it("migrates the old single-provider setting and routes areas to different providers", async () => {
+		const c = await loggedIn();
+		await env.DB.prepare(`INSERT INTO settings (key, value) VALUES ('ai', ?)`)
+			.bind(JSON.stringify({ baseUrl: "https://old.example/v1", apiKey: "sk-old-9999", model: "chat-1", visionModel: "vis-1", imageModel: "img-1", tryonMode: "chat" }))
+			.run();
+		const before = await c.json<AppSettings>("/api/settings");
+		expect(before.ai.routes).toMatchObject({
+			text: { provider: "p1", model: "chat-1" },
+			vision: { provider: "p1", model: "vis-1" },
+			tryon: { provider: "p1", model: "img-1", mode: "chat" },
+			studio: { provider: "" },
+		});
+
+		const res = await c.req("/api/settings", {
+			method: "PATCH",
+			body: {
+				ai: {
+					providers: [
+						{ id: "p1", name: "Proxy", kind: "openai", baseUrl: "https://old.example/v1" },
+						{ id: "cf", name: "Cloudflare", kind: "cloudflare", accountId: "0123456789abcdef0123456789abcdef", apiKey: "cf-token-abcd" },
+					],
+					routes: { studio: { provider: "cf", model: "@cf/black-forest-labs/flux-2-dev" }, tryon: { provider: "cf", model: "@cf/black-forest-labs/flux-2-dev" } },
+					studio: { auto: true, steps: 20 },
+				},
+			},
+		});
+		const text = await res.text();
+		expect(text).not.toContain("sk-old");
+		expect(text).not.toContain("cf-token");
+		const s = JSON.parse(text) as AppSettings;
+		expect(s.ai.providers.map((p) => [p.id, p.hasKey])).toEqual([
+			["p1", true],
+			["cf", true],
+		]);
+		expect(s.ai.areas).toEqual({ text: true, vision: true, studio: true, tryon: true });
+		expect(s.ai.studio).toMatchObject({ auto: true, steps: 20, freeOnly: true, metered: true });
+
+		// Removing a provider switches its areas off.
+		const removed = await c.json<AppSettings>("/api/settings", { method: "PATCH", body: { ai: { providers: [{ id: "p1", kind: "openai", baseUrl: "https://old.example/v1" }] } } });
+		expect(removed.ai.areas).toEqual({ text: true, vision: true, studio: false, tryon: false });
+		expect((await c.req("/api/settings", { method: "PATCH", body: { ai: { providers: [{ kind: "cloudflare", accountId: "nope" }] } } })).status).toBe(400);
+	});
+});
+
+async function withStudio(c: Client, steps = 20) {
+	await c.json("/api/settings", {
+		method: "PATCH",
+		body: {
+			ai: {
+				providers: [{ id: "cf", kind: "cloudflare", accountId: "0123456789abcdef0123456789abcdef", apiKey: "cf-token-abcd" }],
+				routes: { studio: { provider: "cf", model: "@cf/black-forest-labs/flux-2-dev" } },
+				studio: { steps },
+			},
+		},
+	});
+}
+
+async function upload(c: Client): Promise<string> {
+	const form = new FormData();
+	form.append("file", new File([PNG_1PX], "x.png", { type: "image/png" }));
+	return (await c.json<{ key: string }>("/api/images", { body: form })).key;
+}
+
+describe("studio pictures", () => {
+	it("generates on Cloudflare, books the usage and hands the raw picture to the app", async () => {
+		const c = await loggedIn();
+		await withStudio(c);
+		const front = await upload(c);
+		const item = await c.json<Item>("/api/items", { body: { name: "Pulli", category: "top", imageFront: front } });
+		const seen: { url: string; form: FormData; auth: string | null }[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+			const req = new Request(input, init);
+			seen.push({ url: req.url, form: await req.formData(), auth: req.headers.get("Authorization") });
+			return Response.json({ result: { image: btoa(String.fromCharCode(...PNG_1PX)) }, success: true });
+		});
+		const input = await upload(c);
+		const queued = await c.json<Item>(`/api/items/${item.id}/studio`, { body: { image: input } });
+		expect(queued.studioState).toBe("queued");
+		await studioRunner.idle();
+
+		expect(seen).toHaveLength(1);
+		expect(seen[0]!.url).toBe("https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/run/@cf/black-forest-labs/flux-2-dev");
+		expect(seen[0]!.auth).toBe("Bearer cf-token-abcd");
+		expect(seen[0]!.form.get("width")).toBe("768");
+		expect(seen[0]!.form.get("height")).toBe("1024");
+		expect(seen[0]!.form.get("steps")).toBe("20");
+		expect(seen[0]!.form.get("input_image_0")).toBeInstanceOf(File);
+		expect(String(seen[0]!.form.get("prompt"))).toContain("ghost mannequin");
+
+		const raw = await c.json<Item>(`/api/items/${item.id}`);
+		expect(raw.studioState).toBe("raw");
+		expect(raw.studioRaw).toMatch(/^studio\//);
+		expect(await env.IMAGES.get(input)).toBeNull();
+		const s = await c.json<AppSettings>("/api/settings");
+		expect(s.ai.studio.imagesToday).toBe(1);
+		expect(s.ai.studio.usedToday).toBeGreaterThan(2000);
+
+		const [full, thumb] = [await upload(c), await upload(c)];
+		const done = await c.json<Item>(`/api/items/${item.id}/studio/done`, { body: { imageStudio: full, thumbStudio: thumb, raw: raw.studioRaw } });
+		expect(done).toMatchObject({ studioState: "done", imageStudio: full, thumbStudio: thumb, studioRaw: null });
+		expect(await env.IMAGES.get(raw.studioRaw!)).toBeNull();
+
+		const off = await c.json<Item>(`/api/items/${item.id}/studio`, { method: "DELETE" });
+		expect(off).toMatchObject({ studioState: "off", imageStudio: null });
+		expect(await env.IMAGES.get(full)).toBeNull();
+	});
+
+	it("waits instead of spending when the free allowance is used up", async () => {
+		const c = await loggedIn();
+		await withStudio(c, 50);
+		const item = await c.json<Item>("/api/items", { body: { name: "Jeans", category: "bottom" } });
+		await env.DB.prepare(`INSERT INTO ai_usage (day, provider, neurons, images) VALUES (?, 'cf', 8000, 2)`)
+			.bind(new Date().toISOString().slice(0, 10))
+			.run();
+		const fetchSpy = vi.spyOn(globalThis, "fetch");
+		await c.json<Item>(`/api/items/${item.id}/studio`, { body: { image: await upload(c) } });
+		await expect.poll(async () => (await c.json<Item>(`/api/items/${item.id}`)).studioState).toBe("waiting");
+		expect(fetchSpy).not.toHaveBeenCalled();
+		// Cancelling ends the wait for good.
+		await c.json(`/api/items/${item.id}/studio`, { method: "DELETE" });
+		expect((await c.json<Item>(`/api/items/${item.id}`)).studioState).toBe("off");
 	});
 });
 

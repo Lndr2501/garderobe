@@ -2,8 +2,9 @@
 // (30–150 s per photo) never lose a result: retries, survives restarts, no dependency on the open app.
 import type { CategoryKey } from "../shared/taxonomy.ts";
 import type { ItemInput } from "../shared/types.ts";
-import { aiConfigured, chatJson, EMPTY_AI, type AiConfig } from "./ai.ts";
-import { ensureSchema, getSetting, ITEM_COLUMNS, now } from "./db.ts";
+import { aiConfigured, chatJson, type AiConfig } from "./ai.ts";
+import { loadAi } from "./aisettings.ts";
+import { ensureSchema, ITEM_COLUMNS, now } from "./db.ts";
 import { deleteImages, getImageBytes, toDataUrl, type ImageEnv } from "./images.ts";
 import { NonRetryableError, type JobQueue, type Step } from "./jobs.ts";
 import type { Db } from "./platform.ts";
@@ -48,10 +49,6 @@ export const AI_FIELDS = [
 /** Every field a user can lock by editing it (AI fields + rotation). */
 export const LOCKABLE = new Set<string>([...AI_FIELDS, "rotate"]);
 
-export async function loadAi(db: Db): Promise<AiConfig> {
-	return { ...EMPTY_AI, ...(await getSetting<Partial<AiConfig>>(db, "ai", {})) };
-}
-
 const UPRIGHT: Record<string, number> = { oben: 0, links: 90, unten: 180, rechts: 270 };
 const SOLE_DOWN: Record<string, number> = { unten: 0, rechts: 90, oben: 180, links: 270 };
 
@@ -83,7 +80,7 @@ export async function tagImage(ai: AiConfig, imageDataUrl: string, colorHint?: s
 				],
 			},
 		],
-		{ model: ai.visionModel || ai.model, temperature: 0.1, maxTokens: 900 },
+		{ temperature: 0.1, maxTokens: 900 },
 	);
 	const tags = sanitizeItem(raw);
 	for (const k of Object.keys(tags)) if (!(AI_FIELDS as readonly string[]).includes(k)) delete tags[k as keyof ItemInput];
@@ -145,8 +142,8 @@ export async function runTagJob(env: TagEnv, params: TagParams, step: Step): Pro
 			{ retries: { limit: 3, delay: "20 seconds", backoff: "exponential" }, timeout: "6 minutes" },
 			async () => {
 				await ensureSchema(env.DB);
-				const ai = await loadAi(env.DB);
-				if (!aiConfigured(ai)) throw new NonRetryableError("Keine KI eingerichtet (Einstellungen → KI).");
+				const ai = await loadAi(env.DB, "vision");
+				if (!aiConfigured(ai)) throw new NonRetryableError("Keine KI für die Erkennung eingerichtet (Einstellungen → KI).");
 				const img = await getImageBytes(env, aiImage);
 				if (!img) throw new NonRetryableError("Bild für die Erkennung fehlt.");
 				return await tagImage(ai, toDataUrl(img.data, img.type), colorHint);

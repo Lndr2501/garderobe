@@ -39,7 +39,9 @@ function delay(ms: number): Promise<void> {
 		const tick = (left: number) => {
 			if (left <= 0) return resolve();
 			const chunk = Math.min(left, 2 ** 31 - 1);
-			setTimeout(() => tick(left - chunk), chunk);
+			// A sleeping job alone must not keep the process alive (the HTTP server does that).
+			const timer = setTimeout(() => tick(left - chunk), chunk) as { unref?: () => void };
+			timer.unref?.();
 		};
 		tick(ms);
 	});
@@ -104,14 +106,22 @@ export class JobRunner {
 		};
 	}
 
-	/** Picks up jobs that were queued or running when the process stopped. Drops old finished ones. */
+	/**
+	 * Picks up this runner's jobs (its registered kinds) that were queued or running when the process
+	 * stopped. Drops old finished ones.
+	 */
 	async resume(): Promise<number> {
 		const old = new Date(Date.now() - 7 * 86_400_000).toISOString();
 		await this.db.batch([
 			this.db.prepare(`DELETE FROM job_steps WHERE job_id IN (SELECT id FROM jobs WHERE state IN ('done', 'failed') AND updated_at < ?)`).bind(old),
 			this.db.prepare(`DELETE FROM jobs WHERE state IN ('done', 'failed') AND updated_at < ?`).bind(old),
 		]);
-		const { results } = await this.db.prepare(`SELECT id FROM jobs WHERE state IN ('queued', 'running') ORDER BY created_at`).all<{ id: string }>();
+		const kinds = [...this.handlers.keys()];
+		if (!kinds.length) return 0;
+		const { results } = await this.db
+			.prepare(`SELECT id FROM jobs WHERE state IN ('queued', 'running') AND kind IN (${kinds.map(() => "?").join(", ")}) ORDER BY created_at`)
+			.bind(...kinds)
+			.all<{ id: string }>();
 		for (const r of results) this.enqueue(r.id);
 		return results.length;
 	}

@@ -9,10 +9,8 @@ import {
 	chatJson,
 	chatStream,
 	chatText,
-	imageEdit,
-	imageViaChat,
+	generateImage,
 	listModels,
-	normalizeBaseUrl,
 	type ChatMessage,
 } from "./ai.ts";
 import {
@@ -56,17 +54,30 @@ import {
 	newImageKey,
 	putImage,
 } from "./images.ts";
-import { chatSystemPrompt, packingPrompt, shoppingPrompt, suggestPrompt, tryOnPrompt } from "./prompts.ts";
+import { chatSystemPrompt, packingPrompt, shoppingPrompt, suggestPrompt, tryOnPrompt, tryOnPromptEn } from "./prompts.ts";
 import { isDate, isObj, sanitizeEntries, sanitizeItem, sanitizeOutfit, str } from "./validate.ts";
 import type { JobQueue } from "./jobs.ts";
 import type { BlobStore, Db } from "./platform.ts";
-import { LOCKABLE, loadAi, startTagging, tagImage, type TagParams } from "./tagging.ts";
+import { LOCKABLE, startTagging, tagImage, type TagParams } from "./tagging.ts";
+import {
+	applyAiPatch,
+	configFor,
+	loadAi,
+	loadAiStore,
+	providerConfig,
+	publicAi,
+	releaseUsage,
+	reserveUsage,
+	saveAiStore,
+} from "./aisettings.ts";
+import { fluxNeurons, imageDims, startStudio, type StudioParams } from "./studio.ts";
 
 export interface Bindings {
 	DB: Db;
 	IMAGES: BlobStore;
 	ALLOW_SETUP?: string;
 	TAGGER?: JobQueue<TagParams>;
+	STUDIO?: JobQueue<StudioParams>;
 }
 
 type Ctx = Context<{ Bindings: Bindings }>;
@@ -257,7 +268,7 @@ app.post("/api/items", async (c) => {
 		.run();
 	const aiImage = aiImageKey(b.aiImage);
 	if (aiImage) {
-		if (aiConfigured(await loadAi(c.env.DB))) await startTagging(c.env, { itemId: id, aiImage, colorHint: str(b.colorHint, 40) });
+		if (aiConfigured(await loadAi(c.env.DB, "vision"))) await startTagging(c.env, { itemId: id, aiImage, colorHint: str(b.colorHint, 40) });
 		else c.executionCtx.waitUntil(deleteImages(c.env, [aiImage]));
 	}
 	return c.json(await getItem(c.env.DB, id), 201);
@@ -270,9 +281,9 @@ app.post("/api/items/:id/retag", async (c) => {
 	const b = await body(c);
 	const aiImage = aiImageKey(b.aiImage);
 	if (!aiImage) throw new HttpError(400, "Bild für die Erkennung fehlt");
-	if (!aiConfigured(await loadAi(c.env.DB))) {
+	if (!aiConfigured(await loadAi(c.env.DB, "vision"))) {
 		c.executionCtx.waitUntil(deleteImages(c.env, [aiImage]));
-		throw new HttpError(400, "Keine KI eingerichtet (Einstellungen → KI).");
+		throw new HttpError(400, "Keine KI für die Erkennung eingerichtet (Einstellungen → KI).");
 	}
 	// "Neu erkennen" means: let the AI decide again, also over fields the user had set.
 	if (b.unlock === true) await c.env.DB.prepare(`UPDATE items SET user_fields = '[]' WHERE id = ?`).bind(id).run();
@@ -318,8 +329,61 @@ app.delete("/api/items/:id", async (c) => {
 		c.env.DB.prepare(`DELETE FROM items WHERE id = ?`).bind(id),
 		c.env.DB.prepare(`DELETE FROM wears WHERE item_id = ?`).bind(id),
 	]);
-	c.executionCtx.waitUntil(deleteImages(c.env, [item.imageFront, item.thumbFront, item.imageBack, item.thumbBack]));
+	c.executionCtx.waitUntil(
+		deleteImages(c.env, [item.imageFront, item.thumbFront, item.imageBack, item.thumbBack, item.imageStudio, item.thumbStudio, item.studioRaw]),
+	);
 	return c.json({ ok: true });
+});
+
+// ---------- Studio pictures ----------
+
+/** Starts (or restarts) a studio picture from an uploaded helper JPEG of the piece on white. */
+app.post("/api/items/:id/studio", async (c) => {
+	const id = c.req.param("id");
+	await getItem(c.env.DB, id);
+	const b = await body(c);
+	const input = aiImageKey(b.image);
+	if (!input) throw new HttpError(400, "Bild für das Studio fehlt");
+	if (!aiConfigured(await loadAi(c.env.DB, "studio"))) {
+		c.executionCtx.waitUntil(deleteImages(c.env, [input]));
+		throw new HttpError(400, "Kein Bild-Anbieter für Studio-Bilder eingerichtet (Einstellungen → KI).");
+	}
+	await startStudio(c.env, id, input);
+	return c.json(await getItem(c.env.DB, id));
+});
+
+/** The app removed the background of the generated picture and uploaded the result. */
+app.post("/api/items/:id/studio/done", async (c) => {
+	const id = c.req.param("id");
+	const item = await getItem(c.env.DB, id);
+	const b = await body(c);
+	const image = typeof b.imageStudio === "string" && isValidKey(b.imageStudio) ? b.imageStudio : null;
+	const thumb = typeof b.thumbStudio === "string" && isValidKey(b.thumbStudio) ? b.thumbStudio : null;
+	if (!image || !thumb) throw new HttpError(400, "Bilder fehlen");
+	if (item.studioState !== "raw" || (typeof b.raw === "string" && b.raw !== item.studioRaw)) {
+		c.executionCtx.waitUntil(deleteImages(c.env, [image, thumb]));
+		return c.json(item);
+	}
+	await c.env.DB.prepare(
+		`UPDATE items SET image_studio = ?, thumb_studio = ?, studio_raw = NULL, studio_state = 'done', studio_error = '', prefer_original = 0, updated_at = ? WHERE id = ?`,
+	)
+		.bind(image, thumb, now(), id)
+		.run();
+	c.executionCtx.waitUntil(deleteImages(c.env, [item.imageStudio, item.thumbStudio, item.studioRaw].filter((k) => k !== image && k !== thumb)));
+	return c.json(await getItem(c.env.DB, id));
+});
+
+/** Removes the studio picture (or cancels one in the works). Auto mode won't make a new one. */
+app.delete("/api/items/:id/studio", async (c) => {
+	const id = c.req.param("id");
+	const item = await getItem(c.env.DB, id);
+	await c.env.DB.prepare(
+		`UPDATE items SET image_studio = NULL, thumb_studio = NULL, studio_raw = NULL, studio_state = 'off', studio_error = '', studio_job = NULL, updated_at = ? WHERE id = ?`,
+	)
+		.bind(now(), id)
+		.run();
+	c.executionCtx.waitUntil(deleteImages(c.env, [item.imageStudio, item.thumbStudio, item.studioRaw]));
+	return c.json(await getItem(c.env.DB, id));
 });
 
 // ---------- Outfits ----------
@@ -490,22 +554,7 @@ const DEFAULT_SETTINGS: StoredSettings = {
 
 async function loadSettings(db: Db): Promise<AppSettings> {
 	const s = { ...DEFAULT_SETTINGS, ...(await getSetting<Partial<StoredSettings>>(db, "app", {})) };
-	const ai = await loadAi(db);
-	return {
-		...s,
-		ai: {
-			baseUrl: ai.baseUrl,
-			model: ai.model,
-			visionModel: ai.visionModel,
-			imageModel: ai.imageModel,
-			tryonMode: ai.tryonMode,
-			jsonMode: ai.jsonMode,
-			reasoning: ai.reasoning,
-			hasKey: !!ai.apiKey,
-			keyHint: ai.apiKey ? `…${ai.apiKey.slice(-4)}` : "",
-			configured: aiConfigured(ai),
-		},
-	};
+	return { ...s, ai: await publicAi(db, await loadAiStore(db)) };
 }
 
 app.get("/api/settings", async (c) => c.json(await loadSettings(c.env.DB)));
@@ -538,45 +587,48 @@ app.patch("/api/settings", async (c) => {
 		cur.personPhoto = b.personPhoto as string | null;
 	}
 	await setSetting(c.env.DB, "app", cur);
-	if (isObj(b.ai)) {
-		const a = b.ai;
-		const ai = await loadAi(c.env.DB);
-		if (typeof a.baseUrl === "string") ai.baseUrl = a.baseUrl.trim() ? normalizeBaseUrl(a.baseUrl) : "";
-		for (const k of ["model", "visionModel", "imageModel"] as const) {
-			const v = str(a[k], 120);
-			if (v !== undefined) ai[k] = v;
-		}
-		if (a.tryonMode === "edits" || a.tryonMode === "chat") ai.tryonMode = a.tryonMode;
-		if (typeof a.jsonMode === "boolean") ai.jsonMode = a.jsonMode;
-		if (typeof a.reasoning === "boolean") ai.reasoning = a.reasoning;
-		if (typeof a.apiKey === "string" && a.apiKey.trim()) ai.apiKey = a.apiKey.trim().slice(0, 500);
-		if (a.clearKey === true) ai.apiKey = "";
-		await setSetting(c.env.DB, "ai", ai);
-	}
+	if (isObj(b.ai)) await saveAiStore(c.env.DB, applyAiPatch(await loadAiStore(c.env.DB), b.ai));
 	return c.json(await loadSettings(c.env.DB));
 });
 
 // ---------- AI ----------
 
-app.get("/api/ai/models", async (c) => c.json({ models: await listModels(await loadAi(c.env.DB)) }));
+/** A saved provider by id (default: the one used for texts). */
+async function providerById(db: Db, id: string | undefined) {
+	const store = await loadAiStore(db);
+	const p = store.providers.find((x) => x.id === (id || store.routes.text.provider)) ?? store.providers[0];
+	if (!p) throw new HttpError(400, "Noch kein KI-Anbieter eingerichtet");
+	return { p, store };
+}
 
+app.get("/api/ai/models", async (c) => {
+	const { p } = await providerById(c.env.DB, c.req.query("provider"));
+	return c.json({ models: await listModels(providerConfig(p)) });
+});
+
+/** Checks a provider: lists its models and, if a chat model is given (or routed to it), asks it a tiny question. */
 app.post("/api/ai/test", async (c) => {
-	const ai = await loadAi(c.env.DB);
+	const b = await body(c);
+	const { p, store } = await providerById(c.env.DB, str(b.provider, 40));
+	const routed = (["text", "vision"] as const).map((a) => store.routes[a]).find((r) => r.provider === p.id && r.model);
+	const model = str(b.model, 160) || routed?.model || "";
+	const cfg = providerConfig(p, model);
 	const result: { ok: boolean; models?: string[]; reply?: string; error?: string; modelsError?: string; ms?: number } = { ok: false };
 	const [models, reply] = await Promise.allSettled([
-		listModels(ai),
+		listModels(cfg),
 		(async () => {
+			if (!model) return null;
 			const t0 = Date.now();
-			const text = await chatText(ai, [{ role: "user", content: "Antworte nur mit: Bereit!" }], { maxTokens: 400 });
+			const text = await chatText(cfg, [{ role: "user", content: "Antworte nur mit: Bereit!" }], { maxTokens: 400 });
 			result.ms = Date.now() - t0;
 			return text;
 		})(),
 	]);
-	if (models.status === "fulfilled") result.models = models.value.slice(0, 200);
+	if (models.status === "fulfilled") result.models = models.value.slice(0, 300);
 	else result.modelsError = (models.reason as Error).message;
 	if (reply.status === "fulfilled") {
-		result.reply = reply.value.slice(0, 200);
-		result.ok = true;
+		if (reply.value !== null) result.reply = reply.value.slice(0, 200);
+		result.ok = reply.value !== null || models.status === "fulfilled";
 	} else result.error = (reply.reason as Error).message;
 	return c.json(result);
 });
@@ -590,7 +642,7 @@ function dataUrlFrom(v: unknown): string {
 app.post("/api/ai/tag", async (c) => {
 	const b = await body(c);
 	const image = dataUrlFrom(b.image);
-	const ai = await loadAi(c.env.DB);
+	const ai = await loadAi(c.env.DB, "vision");
 	const { tags, rotate } = await tagImage(ai, image, str(b.colorHint, 40));
 	return c.json({ ...tags, rotate });
 });
@@ -621,7 +673,7 @@ app.post("/api/ai/suggest", async (c) => {
 	const occasion = str(b.occasion, 120) ?? "";
 	const items = (await listItems(c.env.DB)).filter((i) => i.status === "active");
 	const ids = new Set(items.map((i) => i.id));
-	const ai = await loadAi(c.env.DB);
+	const ai = await loadAi(c.env.DB, "text");
 	let aiError: string | undefined;
 	if (b.useAi !== false && aiConfigured(ai) && items.length >= 2) {
 		try {
@@ -667,11 +719,12 @@ app.post("/api/ai/chat", async (c) => {
 		.slice(-20)
 		.map((m) => ({ role: m.role as "user" | "assistant", content: m.content.slice(0, 4000) }));
 	if (!messages.length || messages[messages.length - 1]!.role !== "user") throw new HttpError(400, "Nachricht fehlt");
-	const ai = await loadAi(c.env.DB);
 	const items = await listItems(c.env.DB);
 	const settings = await loadSettings(c.env.DB);
 	const context = [str(b.context, 600) ?? "", `Zuletzt getragen: ${await recentWearText(c.env.DB, items)}`].join(" ");
 	const image = typeof b.image === "string" ? dataUrlFrom(b.image) : null;
+	// With a photo the recognition model answers (it can see), otherwise the text model.
+	const ai = await loadAi(c.env.DB, image ? "vision" : "text");
 	if (image) {
 		const last = messages[messages.length - 1]!;
 		last.content = [
@@ -681,7 +734,6 @@ app.post("/api/ai/chat", async (c) => {
 	}
 	const stream = await chatStream(ai, [{ role: "system", content: chatSystemPrompt(items, context, settings.name) }, ...messages], {
 		temperature: 0.6,
-		model: image ? ai.visionModel || ai.model : ai.model,
 	});
 	return new Response(stream, {
 		headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no" },
@@ -692,7 +744,7 @@ app.post("/api/ai/shopping", async (c) => {
 	const b = await body(c);
 	const items = (await listItems(c.env.DB)).filter((i) => i.status === "active");
 	const ids = new Set(items.map((i) => i.id));
-	const ai = await loadAi(c.env.DB);
+	const ai = await loadAi(c.env.DB, "vision");
 	const note = str(b.note, 300) ?? "";
 	if (typeof b.image === "string" && aiConfigured(ai)) {
 		const image = dataUrlFrom(b.image);
@@ -707,7 +759,7 @@ app.post("/api/ai/shopping", async (c) => {
 					],
 				},
 			],
-			{ model: ai.visionModel || ai.model, temperature: 0.3, maxTokens: 2000 },
+			{ temperature: 0.3, maxTokens: 2000 },
 		);
 		const clean = sanitizeItem(raw);
 		const idList = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && ids.has(x)) : []);
@@ -853,7 +905,7 @@ app.post("/api/trips/:id/generate", async (c) => {
 	const w = trip.weather ?? [];
 	const avg = w.length ? w.reduce((s, d) => s + (d.tMin + d.tMax) / 2, 0) / w.length : 15;
 	const rainy = w.some((d) => d.precip >= 3);
-	const ai = await loadAi(c.env.DB);
+	const ai = await loadAi(c.env.DB, "text");
 	let aiError: string | undefined;
 	let entries = null as ReturnType<typeof sanitizeEntries> | null;
 	let notes = trip.notes;
@@ -911,18 +963,40 @@ app.post("/api/ai/tryon", async (c) => {
 	if (!itemIds.length) throw new HttpError(400, "Bitte Teile auswählen");
 	const settings = await loadSettings(c.env.DB);
 	if (!settings.personPhoto) throw new HttpError(400, "Bitte zuerst ein Ganzkörperfoto von dir hochladen");
-	const ai = await loadAi(c.env.DB);
+	const store = await loadAiStore(c.env.DB);
+	const ai = configFor(store, "tryon");
+	if (!aiConfigured(ai)) throw new HttpError(400, "Kein Bild-Anbieter für die Anprobe eingerichtet (Einstellungen → KI).");
 	const person = await getImageBytes(c.env, settings.personPhoto);
 	if (!person) throw new HttpError(400, "Dein Foto wurde nicht gefunden, bitte neu hochladen");
 	const items = await Promise.all(itemIds.map((id) => getItem(c.env.DB, id)));
 	const images = [{ ...person, name: `person.${person.type.split("/")[1]}` }];
 	for (const it of items) {
-		if (!it.imageFront) continue;
-		const img = await getImageBytes(c.env, it.imageFront);
+		// The clean studio picture (if any) is the better reference.
+		const key = (!it.preferOriginal && it.imageStudio) || it.imageFront;
+		if (!key) continue;
+		const img = await getImageBytes(c.env, key);
 		if (img) images.push({ ...img, name: `item-${images.length}.${img.type.split("/")[1]}` });
 	}
 	const prompt = tryOnPrompt(items.map((i) => i.name || i.subcategory || i.category));
-	const out = ai.tryonMode === "chat" ? await imageViaChat(ai, prompt, images) : await imageEdit(ai, prompt, images);
+	const size = { width: 768, height: 1024, steps: store.studio.steps };
+	let neurons = 0;
+	if (ai.kind === "cloudflare") {
+		// FLUX.2 takes at most 4 references: the person + 3 pieces.
+		images.splice(4);
+		const dims = images.map((img) => imageDims(new Uint8Array(img.data)) ?? { w: 1024, h: 1024 });
+		neurons = fluxNeurons(dims, { w: size.width, h: size.height }, size.steps);
+		const budget = store.studio.freeOnly ? store.studio.budget : null;
+		if (!(await reserveUsage(c.env.DB, ai.providerId, neurons, budget))) {
+			throw new HttpError(429, "Das Gratis-Kontingent für heute ist aufgebraucht – morgen geht's wieder.");
+		}
+	}
+	let out: { data: ArrayBuffer; type: string };
+	try {
+		out = await generateImage(ai, ai.kind === "cloudflare" ? tryOnPromptEn(items.map((i) => i.name || i.subcategory || i.category)) : prompt, images, size);
+	} catch (err) {
+		if (neurons) await releaseUsage(c.env.DB, ai.providerId, neurons);
+		throw err;
+	}
 	const key = newImageKey(out.type, "tryon");
 	await putImage(c.env, key, out.data, out.type);
 	const id = newId();
@@ -950,7 +1024,7 @@ app.get("/api/export", async (c) => {
 		outfits: outfits.results.map(rowToOutfit),
 		wears: wears.results,
 		trips: trips.results.map(rowToTrip),
-		settings: { ...settings, ai: { ...settings.ai, hasKey: undefined, keyHint: undefined } },
+		settings: { ...settings, ai: { ...settings.ai, providers: settings.ai.providers.map(({ hasKey: _h, keyHint: _k, ...p }) => p) } },
 	};
 	return new Response(JSON.stringify(data, null, 2), {
 		headers: {
@@ -965,9 +1039,11 @@ app.post("/api/maintenance/cleanup", async (c) => {
 	const settings = await loadSettings(c.env.DB);
 	const { results: tryons } = await c.env.DB.prepare(`SELECT image FROM tryons`).all<{ image: string }>();
 	const used = new Set<string>();
-	for (const i of items) for (const k of [i.imageFront, i.thumbFront, i.imageBack, i.thumbBack]) if (k) used.add(k);
-	const { results: pendingAi } = await c.env.DB.prepare(`SELECT ai_image FROM items WHERE ai_image IS NOT NULL`).all<{ ai_image: string }>();
-	for (const r of pendingAi) used.add(r.ai_image);
+	for (const i of items) for (const k of [i.imageFront, i.thumbFront, i.imageBack, i.thumbBack, i.imageStudio, i.thumbStudio, i.studioRaw]) if (k) used.add(k);
+	const { results: helpers } = await c.env.DB.prepare(
+		`SELECT ai_image, studio_input FROM items WHERE ai_image IS NOT NULL OR studio_input IS NOT NULL`,
+	).all<{ ai_image: string | null; studio_input: string | null }>();
+	for (const r of helpers) for (const k of [r.ai_image, r.studio_input]) if (k) used.add(k);
 	for (const t of tryons) used.add(t.image);
 	if (settings.personPhoto) used.add(settings.personPhoto);
 	const stored = await listImages(c.env);

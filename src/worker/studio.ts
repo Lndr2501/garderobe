@@ -1,0 +1,189 @@
+// "KI-Studio": turns the user's photo of a piece into a clean product shot (FLUX.2 on Cloudflare,
+// or any image model of the chosen provider). Durable background job; on Cloudflare it keeps to the
+// free daily allowance and simply waits for the next day when it is used up.
+import { AiError, aiConfigured, generateImage } from "./ai.ts";
+import { configFor, exhaustUsage, loadAiStore, msUntilNextUtcDay, releaseUsage, reserveUsage } from "./aisettings.ts";
+import { now } from "./db.ts";
+import { deleteImages, getImageBytes, newImageKey, putImage, type ImageEnv } from "./images.ts";
+import { NonRetryableError, type JobQueue, type Step } from "./jobs.ts";
+import type { Db } from "./platform.ts";
+import { studioPrompt } from "./prompts.ts";
+
+export interface StudioParams {
+	itemId: string;
+	/** Only the newest job of an item may write its result. */
+	jobId: string;
+	/** Uploaded JPEG (piece on white) the picture is made from; deleted afterwards. */
+	input: string;
+}
+
+export interface StudioEnv extends ImageEnv {
+	DB: Db;
+	STUDIO?: JobQueue<StudioParams>;
+}
+
+export function studioSize(category: string): { width: number; height: number } {
+	return category === "shoes" || category === "bag" ? { width: 1024, height: 768 } : { width: 768, height: 1024 };
+}
+
+const TILE = 512 * 512;
+const USD_PER_NEURON = 0.011 / 1000;
+
+/**
+ * Workers AI price of FLUX.2 [dev]: $0.00021 per 512² input tile and $0.00041 per 512² output tile,
+ * each per step – converted to neurons (the unit of the free allowance).
+ */
+export function fluxNeurons(inputs: { w: number; h: number }[], out: { w: number; h: number }, steps: number): number {
+	const tiles = (d: { w: number; h: number }) => Math.ceil((d.w * d.h) / TILE);
+	const inTiles = inputs.reduce((s, d) => s + tiles(d), 0);
+	return Math.ceil(((inTiles * 0.00021 + tiles(out) * 0.00041) * steps) / USD_PER_NEURON);
+}
+
+/** Width/height from a PNG, JPEG or WebP header (null if unknown). */
+export function imageDims(b: Uint8Array): { w: number; h: number } | null {
+	const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+	if (b.length > 24 && b[0] === 0x89 && b[1] === 0x50) return { w: dv.getUint32(16), h: dv.getUint32(20) };
+	if (b.length > 4 && b[0] === 0xff && b[1] === 0xd8) {
+		let i = 2;
+		while (i + 9 < b.length) {
+			if (b[i] !== 0xff) {
+				i++;
+				continue;
+			}
+			const marker = b[i + 1]!;
+			const len = dv.getUint16(i + 2);
+			if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+				return { h: dv.getUint16(i + 5), w: dv.getUint16(i + 7) };
+			}
+			i += 2 + len;
+		}
+		return null;
+	}
+	if (b.length > 30 && String.fromCharCode(...b.subarray(8, 12)) === "WEBP") {
+		const chunk = String.fromCharCode(...b.subarray(12, 16));
+		if (chunk === "VP8X") return { w: 1 + (b[24]! | (b[25]! << 8) | (b[26]! << 16)), h: 1 + (b[27]! | (b[28]! << 8) | (b[29]! << 16)) };
+		if (chunk === "VP8 ") return { w: dv.getUint16(26, true) & 0x3fff, h: dv.getUint16(28, true) & 0x3fff };
+		if (chunk === "VP8L") {
+			const bits = dv.getUint32(21, true);
+			return { w: (bits & 0x3fff) + 1, h: ((bits >> 14) & 0x3fff) + 1 };
+		}
+	}
+	return null;
+}
+
+/** Queues a studio picture for an item (replaces a running one). */
+export async function startStudio(env: StudioEnv, itemId: string, input: string): Promise<void> {
+	const jobId = crypto.randomUUID();
+	await env.DB.prepare(`UPDATE items SET studio_state = 'queued', studio_error = '', studio_input = ?, studio_job = ?, updated_at = ? WHERE id = ?`)
+		.bind(input, jobId, now(), itemId)
+		.run();
+	try {
+		if (!env.STUDIO) throw new Error("Studio-Bilder sind hier nicht verfügbar");
+		await env.STUDIO.create({ id: jobId, params: { itemId, jobId, input } });
+	} catch (err) {
+		await env.DB.prepare(`UPDATE items SET studio_state = 'failed', studio_error = ? WHERE id = ? AND studio_job = ?`)
+			.bind(String((err as Error).message).slice(0, 300), itemId, jobId)
+			.run();
+	}
+}
+
+const QUOTA_DAYS = 14;
+
+export async function runStudioJob(env: StudioEnv, params: StudioParams, step: Step): Promise<void> {
+	const { itemId, jobId, input } = params;
+	const db = env.DB;
+	const isCurrent = async () =>
+		(await db.prepare(`SELECT studio_job FROM items WHERE id = ?`).bind(itemId).first<{ studio_job: string | null }>())?.studio_job === jobId;
+	const setState = (state: string, error = "") =>
+		db.prepare(`UPDATE items SET studio_state = ?, studio_error = ? WHERE id = ? AND studio_job = ?`).bind(state, error.slice(0, 300), itemId, jobId).run();
+
+	let raw: string | null = null;
+	let error = "";
+	try {
+		for (let n = 0; n < QUOTA_DAYS && !raw; n++) {
+			const plan = await step.do(`plan-${n}`, async () => {
+				if (!(await isCurrent())) return { stop: true, ok: false, neurons: 0, provider: "" };
+				const store = await loadAiStore(db);
+				const cfg = configFor(store, "studio");
+				if (!aiConfigured(cfg)) throw new NonRetryableError("Kein Bild-Anbieter für Studio-Bilder eingerichtet (Einstellungen → KI).");
+				const img = await env.IMAGES.get(input);
+				if (!img) throw new NonRetryableError("Ausgangsbild fehlt.");
+				const item = await db.prepare(`SELECT category FROM items WHERE id = ?`).bind(itemId).first<{ category: string }>();
+				const size = studioSize(item?.category ?? "");
+				const dims = imageDims(img.data) ?? { w: 1024, h: 1024 };
+				const metered = cfg.kind === "cloudflare";
+				const neurons = metered ? fluxNeurons([dims], { w: size.width, h: size.height }, store.studio.steps) : 0;
+				const budget = metered && store.studio.freeOnly ? store.studio.budget : null;
+				if (budget !== null && neurons > budget) throw new NonRetryableError("Ein Bild braucht mehr als das Tagesbudget – weniger Schritte wählen.");
+				const ok = await reserveUsage(db, cfg.providerId, neurons, budget);
+				return { stop: false, ok, neurons, provider: cfg.providerId };
+			});
+			if (plan.stop) return;
+			if (!plan.ok) {
+				await step.do(`waiting-${n}`, () => setState("waiting"));
+				await step.sleep(`wait-${n}`, msUntilNextUtcDay());
+				continue;
+			}
+			let out: { key: string | null; quota: boolean };
+			try {
+				out = await step.do(`generate-${n}`, { retries: { limit: 2, delay: "30 seconds", backoff: "exponential" }, timeout: "5 minutes" }, async () => {
+					if (!(await isCurrent())) return { key: null, quota: false };
+					await setState("running");
+					const store = await loadAiStore(db);
+					const cfg = configFor(store, "studio");
+					const img = await getImageBytes(env, input);
+					if (!img) throw new NonRetryableError("Ausgangsbild fehlt.");
+					const item = await db
+						.prepare(`SELECT category, subcategory FROM items WHERE id = ?`)
+						.bind(itemId)
+						.first<{ category: string; subcategory: string }>();
+					const size = studioSize(item?.category ?? "");
+					try {
+						const res = await generateImage(cfg, studioPrompt(item?.category ?? "", item?.subcategory ?? ""), [{ ...img, name: `ref.${img.type.split("/")[1]}` }], {
+							...size,
+							steps: store.studio.steps,
+						});
+						const key = newImageKey(res.type, "studio");
+						await putImage(env, key, res.data, res.type);
+						return { key, quota: false };
+					} catch (err) {
+						if (err instanceof AiError && err.status === 429 && /Tageskontingent/.test(err.message)) {
+							await exhaustUsage(db, cfg.providerId, store.studio.budget);
+							return { key: null, quota: true };
+						}
+						throw err;
+					}
+				});
+			} catch (err) {
+				await step.do(`release-${n}`, () => releaseUsage(db, plan.provider, plan.neurons));
+				throw err;
+			}
+			if (out.quota) {
+				await step.do(`waiting-q-${n}`, () => setState("waiting"));
+				await step.sleep(`wait-q-${n}`, msUntilNextUtcDay());
+				continue;
+			}
+			if (!out.key) return;
+			raw = out.key;
+		}
+		if (!raw) error = "Das Tageskontingent war zu lange aufgebraucht.";
+	} catch (err) {
+		error = (err as Error).message || "Studio-Bild fehlgeschlagen";
+	} finally {
+		await step.do("cleanup", async () => {
+			await deleteImages(env, [input]);
+			await db.prepare(`UPDATE items SET studio_input = NULL WHERE id = ? AND studio_input = ?`).bind(itemId, input).run();
+		});
+	}
+	await step.do("save", async () => {
+		if (!(await isCurrent())) {
+			if (raw) await deleteImages(env, [raw]);
+			return;
+		}
+		if (raw) {
+			await db.prepare(`UPDATE items SET studio_state = 'raw', studio_raw = ?, studio_error = '', updated_at = ? WHERE id = ? AND studio_job = ?`)
+				.bind(raw, now(), itemId, jobId)
+				.run();
+		} else await setState("failed", error);
+	});
+}
