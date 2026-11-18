@@ -19,10 +19,10 @@ export default defineConfig({
 	webServer: [
 		{ command: "node e2e/mock-ai.mjs", port: 8799, reuseExistingServer: true, gracefulShutdown: { signal: "SIGTERM", timeout: 1000 } },
 		{
-			command: `rm -rf .cloudflare/state && npx cf dev -- --port ${PORT} --strictPort`,
+			command: `rm -rf e2e/.tmp/data && npm run build && DATA_DIR=e2e/.tmp/data ALLOW_SETUP=true PORT=${PORT} STATIC_DIR=dist/client node --disable-warning=ExperimentalWarning dist/server/main.mjs`,
 			url: `http://localhost:${PORT}/api/health`,
 			reuseExistingServer: false,
-			timeout: 120_000,
+			timeout: 240_000,
 			gracefulShutdown: { signal: "SIGTERM", timeout: 3000 },
 		},
 	],

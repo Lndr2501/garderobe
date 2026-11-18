@@ -51,23 +51,22 @@ import {
 	getImageBytes,
 	isAllowedType,
 	isValidKey,
-	listImageKeys,
+	listImages,
 	MAX_IMAGE_BYTES,
 	newImageKey,
 	putImage,
 } from "./images.ts";
 import { chatSystemPrompt, packingPrompt, shoppingPrompt, suggestPrompt, tryOnPrompt } from "./prompts.ts";
 import { isDate, isObj, sanitizeEntries, sanitizeItem, sanitizeOutfit, str } from "./validate.ts";
+import type { JobQueue } from "./jobs.ts";
+import type { BlobStore, Db } from "./platform.ts";
 import { LOCKABLE, loadAi, startTagging, tagImage, type TagParams } from "./tagging.ts";
 
-export { TagWorkflow } from "./tagging.ts";
-
 export interface Bindings {
-	DB: D1Database;
-	IMAGES: KVNamespace;
-	BUCKET?: R2Bucket;
+	DB: Db;
+	IMAGES: BlobStore;
 	ALLOW_SETUP?: string;
-	TAGGER?: Workflow<TagParams>;
+	TAGGER?: JobQueue<TagParams>;
 }
 
 type Ctx = Context<{ Bindings: Bindings }>;
@@ -220,7 +219,7 @@ app.get("/api/img/:prefix/:file", async (c) => {
 
 app.get("/api/items", async (c) => c.json(await listItems(c.env.DB)));
 
-async function getItem(db: D1Database, id: string): Promise<Item> {
+async function getItem(db: Db, id: string): Promise<Item> {
 	const row = await db.prepare(`${ITEM_SELECT} WHERE i.id = ?`).bind(id).first<ItemRow>();
 	if (!row) throw new HttpError(404, "Teil nicht gefunden");
 	return rowToItem(row);
@@ -330,7 +329,7 @@ app.get("/api/outfits", async (c) => {
 	return c.json(results.map(rowToOutfit));
 });
 
-async function getOutfit(db: D1Database, id: string) {
+async function getOutfit(db: Db, id: string) {
 	const row = await db.prepare(`SELECT * FROM outfits WHERE id = ?`).bind(id).first<OutfitRow>();
 	if (!row) throw new HttpError(404, "Outfit nicht gefunden");
 	return rowToOutfit(row);
@@ -367,7 +366,7 @@ app.delete("/api/outfits/:id", async (c) => {
 
 // ---------- Wear log ----------
 
-async function wearDays(db: D1Database, from: string, to: string): Promise<WearDay[]> {
+async function wearDays(db: Db, from: string, to: string): Promise<WearDay[]> {
 	const { results } = await db
 		.prepare(`SELECT date, item_id, outfit_id FROM wears WHERE date >= ? AND date <= ? ORDER BY date, created_at`)
 		.bind(from, to)
@@ -489,7 +488,7 @@ const DEFAULT_SETTINGS: StoredSettings = {
 	personPhoto: null,
 };
 
-async function loadSettings(db: D1Database): Promise<AppSettings> {
+async function loadSettings(db: Db): Promise<AppSettings> {
 	const s = { ...DEFAULT_SETTINGS, ...(await getSetting<Partial<StoredSettings>>(db, "app", {})) };
 	const ai = await loadAi(db);
 	return {
@@ -608,7 +607,7 @@ function weatherText(w: Record<string, unknown>): string {
 	return parts.join(", ") || "unbekannt";
 }
 
-async function recentWearText(db: D1Database, items: Item[]): Promise<string> {
+async function recentWearText(db: Db, items: Item[]): Promise<string> {
 	const since = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
 	const days = await wearDays(db, since, "9999-12-31");
 	const name = new Map(items.map((i) => [i.id, i.name]));
@@ -754,7 +753,7 @@ app.get("/api/trips", async (c) => {
 	return c.json(results.map(rowToTrip));
 });
 
-async function getTrip(db: D1Database, id: string) {
+async function getTrip(db: Db, id: string) {
 	const row = await db.prepare(`SELECT * FROM trips WHERE id = ?`).bind(id).first<TripRow>();
 	if (!row) throw new HttpError(404, "Reise nicht gefunden");
 	return rowToTrip(row);
@@ -791,7 +790,7 @@ function tripFields(b: Record<string, unknown>) {
 	};
 }
 
-async function saveTrip(db: D1Database, id: string, t: ReturnType<typeof rowToTrip>) {
+async function saveTrip(db: Db, id: string, t: ReturnType<typeof rowToTrip>) {
 	await db
 		.prepare(
 			`UPDATE trips SET name = ?, destination = ?, lat = ?, lon = ?, start_date = ?, end_date = ?, activities = ?, entries = ?, weather = ?, notes = ?, updated_at = ? WHERE id = ?`,
@@ -971,17 +970,10 @@ app.post("/api/maintenance/cleanup", async (c) => {
 	for (const r of pendingAi) used.add(r.ai_image);
 	for (const t of tryons) used.add(t.image);
 	if (settings.personPhoto) used.add(settings.personPhoto);
-	const keys = await listImageKeys(c.env);
+	const stored = await listImages(c.env);
+	const keys = stored.map((s) => s.key);
 	// Images uploaded in the last 24h may belong to an unsaved form – keep them.
-	const recent = new Set<string>();
-	if (!c.env.BUCKET) {
-		let cursor: string | undefined;
-		do {
-			const page: KVNamespaceListResult<{ t?: number }> = await c.env.IMAGES.list({ cursor, limit: 1000 });
-			for (const k of page.keys) if ((k.metadata?.t ?? 0) > Date.now() - 86_400_000) recent.add(k.name);
-			cursor = page.list_complete ? undefined : page.cursor;
-		} while (cursor);
-	}
+	const recent = new Set(stored.filter((s) => s.t > Date.now() - 86_400_000).map((s) => s.key));
 	const orphans = keys.filter((k) => isValidKey(k) && !used.has(k) && !recent.has(k));
 	await deleteImages(c.env, orphans);
 	return c.json({ total: keys.length, deleted: orphans.length });

@@ -1,4 +1,5 @@
 import { getMeta, setMeta } from "./db.ts";
+import type { Db } from "./platform.ts";
 
 const enc = new TextEncoder();
 export const SESSION_COOKIE = "gd_session";
@@ -53,7 +54,9 @@ export async function verifyPassword(password: string, stored: string): Promise<
 	return timingSafeEqual(b64(calc), hash);
 }
 
-async function sessionKey(db: D1Database): Promise<CryptoKey> {
+type SessionKey = Awaited<ReturnType<typeof crypto.subtle.importKey>>;
+
+async function sessionKey(db: Db): Promise<SessionKey> {
 	let secret = await getMeta(db, "session_secret");
 	if (!secret) {
 		secret = b64(crypto.getRandomValues(new Uint8Array(32)));
@@ -63,18 +66,18 @@ async function sessionKey(db: D1Database): Promise<CryptoKey> {
 	return crypto.subtle.importKey("raw", unb64(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
 }
 
-export async function rotateSessionSecret(db: D1Database): Promise<void> {
+export async function rotateSessionSecret(db: Db): Promise<void> {
 	await setMeta(db, "session_secret", b64(crypto.getRandomValues(new Uint8Array(32))));
 }
 
-export async function createSession(db: D1Database): Promise<string> {
+export async function createSession(db: Db): Promise<string> {
 	const exp = Date.now() + SESSION_DAYS * 86_400_000;
 	const payload = `v1.${exp}.${b64url(crypto.getRandomValues(new Uint8Array(9)))}`;
 	const sig = await crypto.subtle.sign("HMAC", await sessionKey(db), enc.encode(payload));
 	return `${payload}.${b64url(sig)}`;
 }
 
-export async function verifySession(db: D1Database, token: string | undefined): Promise<boolean> {
+export async function verifySession(db: Db, token: string | undefined): Promise<boolean> {
 	if (!token) return false;
 	const parts = token.split(".");
 	if (parts.length !== 4 || parts[0] !== "v1") return false;
@@ -85,18 +88,18 @@ export async function verifySession(db: D1Database, token: string | undefined): 
 	return timingSafeEqual(b64url(sig), parts[3]!);
 }
 
-export async function getPasswordHash(db: D1Database): Promise<string | null> {
+export async function getPasswordHash(db: Db): Promise<string | null> {
 	return getMeta(db, "password_hash");
 }
 
-export async function setPassword(db: D1Database, password: string): Promise<void> {
+export async function setPassword(db: Db, password: string): Promise<void> {
 	await setMeta(db, "password_hash", await hashPassword(password));
 }
 
 const MAX_ATTEMPTS = 8;
 const WINDOW_MS = 15 * 60_000;
 
-export async function loginBlocked(db: D1Database, ip: string): Promise<boolean> {
+export async function loginBlocked(db: Db, ip: string): Promise<boolean> {
 	const row = await db
 		.prepare(`SELECT count, first_at FROM login_attempts WHERE ip = ?`)
 		.bind(ip)
@@ -106,7 +109,7 @@ export async function loginBlocked(db: D1Database, ip: string): Promise<boolean>
 	return row.count >= MAX_ATTEMPTS;
 }
 
-export async function recordFailedLogin(db: D1Database, ip: string): Promise<void> {
+export async function recordFailedLogin(db: Db, ip: string): Promise<void> {
 	const t = Date.now();
 	await db
 		.prepare(
@@ -119,6 +122,6 @@ export async function recordFailedLogin(db: D1Database, ip: string): Promise<voi
 		.run();
 }
 
-export async function clearFailedLogins(db: D1Database, ip: string): Promise<void> {
+export async function clearFailedLogins(db: Db, ip: string): Promise<void> {
 	await db.prepare(`DELETE FROM login_attempts WHERE ip = ?`).bind(ip).run();
 }

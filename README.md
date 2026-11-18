@@ -23,7 +23,8 @@ OpenAI-kompatible KI-Schnittstelle.
 | Teil | Stack |
 | --- | --- |
 | Frontend | React 19, wouter, TanStack Query (offline gecacht), Vite+ |
-| Backend | Cloudflare Worker (Hono), D1 (Daten), KV (Bilder; R2 wird genutzt, sobald ein `BUCKET`-Binding existiert) |
+| Backend | Node.js 24 (Hono), SQLite (`node:sqlite`), Bilder als Dateien, eigene Job-Warteschlange für die KI |
+| Betrieb | Ein Docker-Container, alle Daten in `/data` (`garderobe.db` + `images/`) |
 | Auth | Ein App-Passwort (PBKDF2), signiertes Session-Cookie (365 Tage), Login-Drossel, Origin-Prüfung |
 | KI | `src/worker/ai.ts`: Streaming (SSE) und JSON, `<think>`-Filter, `/models`, `/images/edits` |
 
@@ -33,22 +34,32 @@ Das Datenbankschema migriert sich beim ersten Request selbst (`src/worker/db.ts`
 
 ```bash
 npm install
-npm run dev          # cf dev (Vite + lokales D1/KV)
-npm run typecheck    # Worker + Client
-npm test             # Worker-/Unit-Tests (vitest, workerd)
+npm run dev          # API auf :8787 (Daten in .dev/data) + Vite mit Hot Reload
+npm run typecheck    # Server + Client
+npm test             # Server-/Unit-Tests (vitest, SQLite im Speicher)
 npm run e2e          # Playwright: Desktop-Chrome + iPhone-WebKit, mit Mock-KI
 npm run icons        # PNG-Icons aus public/icons/icon.svg
 ```
 
 Lokal ist die Ersteinrichtung des Passworts in der App erlaubt (`ALLOW_SETUP=true`), in Produktion nicht:
-dort wird der Passwort-Hash direkt in D1 (`meta.password_hash`) gesetzt.
+dort wird der Passwort-Hash direkt in SQLite (`meta.password_hash`) gesetzt.
 
-## Deploy
+## Betrieb (Docker)
 
 ```bash
-npm run build -- --mode production
-cf deploy --prebuilt --mode production
+docker build -t garderobe .
+docker run -d --name garderobe -p 8000:8000 -v /srv/garderobe/data:/data garderobe
 ```
+
+| Variable | Standard | Zweck |
+| --- | --- | --- |
+| `DATA_DIR` | `/data` | SQLite-Datei und Bilder |
+| `PORT` | `8000` | HTTP-Port |
+| `ALLOW_SETUP` | `false` | Passwort-Ersteinrichtung in der App erlauben |
+| `TRUST_PROXY` | `true` | `X-Forwarded-Proto/Host` vom Reverse-Proxy übernehmen (für Cookies) |
+
+Der Container braucht HTTPS davor (Reverse-Proxy), sonst funktionieren Service-Worker und Login-Cookie
+auf dem iPhone nicht. Backup = den Ordner `/data` sichern.
 
 ## KI einrichten
 

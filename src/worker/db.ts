@@ -1,5 +1,7 @@
 import type { Item, Outfit, Trip, TryOn } from "../shared/types.ts";
 import type { CategoryKey } from "../shared/taxonomy.ts";
+import { JOB_TABLES } from "./jobs.ts";
+import type { Db } from "./platform.ts";
 
 /** Schema migrations, applied once per isolate on first request. */
 const MIGRATIONS: string[][] = [
@@ -85,11 +87,13 @@ const MIGRATIONS: string[][] = [
 		`ALTER TABLE items ADD COLUMN user_fields TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE items ADD COLUMN rotate INTEGER NOT NULL DEFAULT 0`,
 	],
+	// v3: self-hosted background jobs (replaces Cloudflare Workflows)
+	JOB_TABLES,
 ];
 
 let migrated: Promise<void> | null = null;
 
-export function ensureSchema(db: D1Database): Promise<void> {
+export function ensureSchema(db: Db): Promise<void> {
 	if (!migrated) {
 		migrated = migrate(db).catch((err) => {
 			migrated = null;
@@ -99,7 +103,7 @@ export function ensureSchema(db: D1Database): Promise<void> {
 	return migrated;
 }
 
-async function migrate(db: D1Database): Promise<void> {
+async function migrate(db: Db): Promise<void> {
 	await db.prepare(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`).run();
 	const row = await db.prepare(`SELECT value FROM meta WHERE key = 'schema_version'`).first<{ value: string }>();
 	const current = row ? Number(row.value) : 0;
@@ -304,31 +308,31 @@ export function rowToTryOn(r: { id: string; item_ids: string; image: string; cre
 	return { id: r.id, itemIds: parseJson<string[]>(r.item_ids, []), image: r.image, createdAt: r.created_at };
 }
 
-export async function getSetting<T>(db: D1Database, key: string, fallback: T): Promise<T> {
+export async function getSetting<T>(db: Db, key: string, fallback: T): Promise<T> {
 	const row = await db.prepare(`SELECT value FROM settings WHERE key = ?`).bind(key).first<{ value: string }>();
 	return row ? parseJson<T>(row.value, fallback) : fallback;
 }
 
-export async function setSetting(db: D1Database, key: string, value: unknown): Promise<void> {
+export async function setSetting(db: Db, key: string, value: unknown): Promise<void> {
 	await db
 		.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
 		.bind(key, JSON.stringify(value))
 		.run();
 }
 
-export async function getMeta(db: D1Database, key: string): Promise<string | null> {
+export async function getMeta(db: Db, key: string): Promise<string | null> {
 	const row = await db.prepare(`SELECT value FROM meta WHERE key = ?`).bind(key).first<{ value: string }>();
 	return row?.value ?? null;
 }
 
-export async function setMeta(db: D1Database, key: string, value: string): Promise<void> {
+export async function setMeta(db: Db, key: string, value: string): Promise<void> {
 	await db
 		.prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
 		.bind(key, value)
 		.run();
 }
 
-export async function listItems(db: D1Database, includeArchived = true): Promise<Item[]> {
+export async function listItems(db: Db, includeArchived = true): Promise<Item[]> {
 	const sql = includeArchived ? `${ITEM_SELECT} ORDER BY i.created_at DESC` : `${ITEM_SELECT} WHERE i.status = 'active' ORDER BY i.created_at DESC`;
 	const { results } = await db.prepare(sql).all<ItemRow>();
 	return results.map(rowToItem);

@@ -1,10 +1,25 @@
-import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import app from "../src/worker/index.ts";
-import { applyTags } from "../src/worker/tagging.ts";
+import { MemoryBlobStore } from "../src/server/files.ts";
+import { SqliteDb } from "../src/server/sqlite.ts";
+import app, { type Bindings } from "../src/worker/index.ts";
+import { applyTags, type TagParams } from "../src/worker/tagging.ts";
 import type { AppSettings, Item, ShoppingCheckResult, Stats, Trip, WearDay } from "../src/shared/types.ts";
 
 const BASE = "https://garderobe.test";
+
+/** Recognition jobs the API queued (the job runner itself is tested separately). */
+const queuedTags: TagParams[] = [];
+const env: Bindings = {
+	DB: new SqliteDb(":memory:"),
+	IMAGES: new MemoryBlobStore(),
+	ALLOW_SETUP: "true",
+	TAGGER: {
+		async create({ params }) {
+			queuedTags.push(params);
+			return { id: crypto.randomUUID() };
+		},
+	},
+};
 const PW = "super-geheim-123";
 
 class Client {
@@ -13,15 +28,16 @@ class Client {
 	async req(path: string, opts: { method?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<Response> {
 		const h = new Headers(opts.headers);
 		if (this.cookie) h.set("Cookie", this.cookie);
-		let body: BodyInit | undefined;
+		let body: RequestInit["body"];
 		if (opts.body instanceof FormData) body = opts.body;
 		else if (opts.body !== undefined) {
 			body = JSON.stringify(opts.body);
 			h.set("Content-Type", "application/json");
 		}
-		const ctx = createExecutionContext();
-		const res = await app.fetch(new Request(BASE + path, { method: opts.method ?? (body ? "POST" : "GET"), headers: h, body }), env, ctx);
-		await waitOnExecutionContext(ctx);
+		const pending: Promise<unknown>[] = [];
+		const ctx = { waitUntil: (p: Promise<unknown>) => void pending.push(p), passThroughOnException() {}, props: {} };
+		const res = await app.fetch(new Request(BASE + path, { method: opts.method ?? (body ? "POST" : "GET"), headers: h, body }), env, ctx as never);
+		await Promise.allSettled(pending);
 		const sc = res.headers.get("Set-Cookie");
 		const m = sc?.match(/gd_session=([^;]*)/);
 		if (m) this.cookie = m[1] ? `gd_session=${m[1]}` : "";
@@ -67,8 +83,8 @@ beforeEach(async () => {
 		["items", "outfits", "wears", "trips", "tryons", "settings", "login_attempts"].map((t) => env.DB.prepare(`DELETE FROM ${t}`)),
 	);
 	await env.DB.prepare(`DELETE FROM meta WHERE key != 'schema_version'`).run();
-	const keys = await env.IMAGES.list();
-	await Promise.all(keys.keys.map((k) => env.IMAGES.delete(k.name)));
+	for (const k of await env.IMAGES.list()) await env.IMAGES.delete(k.key);
+	queuedTags.length = 0;
 });
 
 afterEach(() => {
@@ -333,11 +349,13 @@ describe("server-side recognition", () => {
 		expect((await c.req(`/api/img/${aiImage}`)).status).toBe(404);
 	});
 
-	it("starts the workflow when an AI is configured", async () => {
+	it("queues the recognition job when an AI is configured", async () => {
 		const c = await loggedIn();
 		await withAi(c);
-		const item = await c.json<Item>("/api/items", { body: { aiImage: await upload(c) } });
+		const aiImage = await upload(c);
+		const item = await c.json<Item>("/api/items", { body: { aiImage, colorHint: "navy" } });
 		expect(item.aiState).toBe("pending");
+		expect(queuedTags).toEqual([{ itemId: item.id, aiImage, colorHint: "navy" }]);
 		const again = await c.json<Item>(`/api/items/${item.id}/retag`, { body: { aiImage: await upload(c), unlock: true } });
 		expect(again.aiState).toBe("pending");
 		expect((await c.req(`/api/items/${item.id}/retag`, { body: {} })).status).toBe(400);

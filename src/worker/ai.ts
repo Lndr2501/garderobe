@@ -314,7 +314,7 @@ export async function imageEdit(cfg: AiConfig, prompt: string, images: ImageInpu
 	form.append("prompt", prompt);
 	form.append("n", "1");
 	for (const img of images) {
-		form.append(images.length > 1 ? "image[]" : "image", new File([img.data], img.name, { type: img.type }));
+		form.append(images.length > 1 ? "image[]" : "image", new File([new Uint8Array(img.data)], img.name, { type: img.type }));
 	}
 	let res: Response;
 	try {

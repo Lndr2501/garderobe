@@ -1,8 +1,8 @@
-// Image storage. Uses an R2 bucket when bound, otherwise Workers KV.
+// Image storage (files on disk in production, memory in tests).
+import type { BlobStore } from "./platform.ts";
 
 export interface ImageEnv {
-	IMAGES: KVNamespace;
-	BUCKET?: R2Bucket;
+	IMAGES: BlobStore;
 }
 
 const ALLOWED = new Set(["image/webp", "image/png", "image/jpeg", "image/avif", "image/gif"]);
@@ -24,55 +24,30 @@ export function isValidKey(key: string): boolean {
 	return /^(img|tryon|person)\/[0-9a-f-]{36}\.(webp|png|jpg|avif|gif)$/.test(key);
 }
 
-export async function putImage(env: ImageEnv, key: string, data: ArrayBuffer, type: string): Promise<void> {
-	if (env.BUCKET) {
-		await env.BUCKET.put(key, data, { httpMetadata: { contentType: type } });
-		return;
-	}
-	await env.IMAGES.put(key, data, { metadata: { type, size: data.byteLength, t: Date.now() } });
+export async function putImage(env: ImageEnv, key: string, data: ArrayBuffer | Uint8Array, type: string): Promise<void> {
+	await env.IMAGES.put(key, data, type);
 }
 
-export async function getImage(env: ImageEnv, key: string): Promise<{ body: ReadableStream | ArrayBuffer; type: string } | null> {
-	if (env.BUCKET) {
-		const obj = await env.BUCKET.get(key);
-		if (!obj) return null;
-		return { body: obj.body, type: obj.httpMetadata?.contentType ?? "application/octet-stream" };
-	}
-	const res = await env.IMAGES.getWithMetadata<{ type: string }>(key, { type: "arrayBuffer", cacheTtl: 86_400 });
-	if (!res.value) return null;
-	return { body: res.value, type: res.metadata?.type ?? "application/octet-stream" };
+export async function getImage(env: ImageEnv, key: string): Promise<{ body: Uint8Array; type: string } | null> {
+	const img = await env.IMAGES.get(key);
+	return img ? { body: img.data, type: img.type } : null;
 }
 
 export async function getImageBytes(env: ImageEnv, key: string): Promise<{ data: ArrayBuffer; type: string } | null> {
-	const img = await getImage(env, key);
+	const img = await env.IMAGES.get(key);
 	if (!img) return null;
-	const data = img.body instanceof ArrayBuffer ? img.body : await new Response(img.body).arrayBuffer();
+	const data = img.data.buffer.slice(img.data.byteOffset, img.data.byteOffset + img.data.byteLength) as ArrayBuffer;
 	return { data, type: img.type };
 }
 
 export async function deleteImages(env: ImageEnv, keys: (string | null | undefined)[]): Promise<void> {
 	const valid = keys.filter((k): k is string => !!k && isValidKey(k));
-	await Promise.all(valid.map((k) => (env.BUCKET ? env.BUCKET.delete(k) : env.IMAGES.delete(k))));
+	await Promise.all(valid.map((k) => env.IMAGES.delete(k)));
 }
 
-export async function listImageKeys(env: ImageEnv): Promise<string[]> {
-	const keys: string[] = [];
-	if (env.BUCKET) {
-		let cursor: string | undefined;
-		do {
-			const page = await env.BUCKET.list({ cursor, limit: 1000 });
-			keys.push(...page.objects.map((o) => o.key));
-			cursor = page.truncated ? page.cursor : undefined;
-		} while (cursor);
-		return keys;
-	}
-	let cursor: string | undefined;
-	do {
-		const page: KVNamespaceListResult<unknown> = await env.IMAGES.list({ cursor, limit: 1000 });
-		keys.push(...page.keys.map((k) => k.name));
-		cursor = page.list_complete ? undefined : page.cursor;
-	} while (cursor);
-	return keys;
+/** All stored keys with their last write time. */
+export async function listImages(env: ImageEnv): Promise<{ key: string; t: number }[]> {
+	return env.IMAGES.list();
 }
 
 export function toDataUrl(data: ArrayBuffer, type: string): string {
