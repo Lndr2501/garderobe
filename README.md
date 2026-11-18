@@ -62,6 +62,21 @@ docker run -d --name garderobe -p 8000:8000 -v /srv/garderobe/data:/data gardero
 Der Container braucht HTTPS davor (Reverse-Proxy), sonst funktionieren Service-Worker und Login-Cookie
 auf dem iPhone nicht. Backup = den Ordner `/data` sichern.
 
+### Update einspielen
+
+1. Datenbank sichern (läuft im Container, ohne Ausfall):
+   ```bash
+   docker exec garderobe node --disable-warning=ExperimentalWarning -e \
+     "const {DatabaseSync}=require('node:sqlite'); new DatabaseSync('/data/garderobe.db').exec(\"VACUUM INTO '/data/backup-$(date +%Y%m%d-%H%M).db'\")"
+   chmod 600 /srv/garderobe/data/backup-*.db   # enthält KI-Schlüssel und Passwort-Hash
+   ```
+2. Altes Image markieren: `docker tag garderobe garderobe:vor-$(date +%Y%m%d)`
+3. Neuen Stand holen (`git pull` oder `git archive <commit>`), dann `docker compose build && docker compose up -d`
+4. Prüfen: `/api/health` antwortet mit 200, `/api/items` ohne Login mit 401.
+
+Das Schema migriert sich beim Start selbst. **Zurück:** Container mit dem `vor-…`-Image starten und bei
+Bedarf `garderobe.db` durch das Backup ersetzen (alte Versionen kennen neue Spalten nicht).
+
 ## KI einrichten
 
 In der App unter **Einstellungen → KI**:
@@ -70,5 +85,11 @@ In der App unter **Einstellungen → KI**:
 2. Unter „Wer macht was?“ für Texte, Erkennung, Studio-Bild und Anprobe je Anbieter und Modell wählen.
 3. Cloudflare braucht die Account-ID und ein API-Token mit „Workers AI“-Recht. FLUX.2 kostet pro Bild
    etwa 3 000–7 500 Neuronen (je nach Qualität); der Free-Plan hat 10 000 pro Tag.
+4. Für Studio-Bilder „Automatisch für alle Teile“ einschalten und „Speichern“. Ist das Tagesbudget
+   aufgebraucht, warten die Bilder bis kurz nach Mitternacht (UTC) und laufen dann weiter.
+
+**Cloudflare-Token anlegen:** Dashboard → My Profile → API Tokens → Create Token → Vorlage
+„Workers AI“ → Token kopieren und in der App beim Cloudflare-Anbieter eintragen. Die Account-ID
+steht im Dashboard rechts unter „Account details“.
 
 Schlüssel bleiben auf dem Server und werden nie wieder angezeigt.
