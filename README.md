@@ -97,16 +97,21 @@ Schlüssel bleiben auf dem Server und werden nie wieder angezeigt.
 ### Studio-Bilder lokal auf einem Mac (FLUX.2 Klein 4B)
 
 Der App-Server schickt ein Referenzbild per SSH an den Mac. Dort führt der Helfer
-`Flux2CLI i2i --model klein-4b` aus und streamt das PNG zurück. Die App zeigt die
-Warteschlange, die Generierung und das fertige Bild an. Der graue Studiohintergrund
-und die weichen Schatten bleiben erhalten. Das Original bleibt auswählbar.
+`Flux2CLI i2i --model klein-4b` aus und stellt das Kleidungsstück anschließend
+mit macOS Vision frei (auf dem Mac, ohne Modell-Download im Browser). Die App zeigt
+die Warteschlange und danach das Studio-Bild ohne Hintergrund. Das Original bleibt
+auswählbar. Ältere, noch nicht freigestellte lokale Studio-Bilder werden beim
+Serverstart nachbearbeitet, ohne FLUX erneut aufzurufen.
 Es gibt kein Cloudflare-Kontingent und keinen automatischen Cloud-Fallback für lokale Jobs.
 
-1. **Mac:** „Remote Login“ (Entfernte Anmeldung) aktivieren. Der SSH-Benutzer braucht
-   Zugriff auf Flux2CLI und die Klein-4B-Modelle in seinem Benutzerkonto. Den Helfer aus
-   dem Repo unter `~/.local/libexec/garderobe-flux` installieren, zum Beispiel auf dem Mac:
+1. **Mac (macOS 14 oder neuer):** „Remote Login“ (Entfernte Anmeldung) aktivieren.
+   Der SSH-Benutzer braucht Zugriff auf Flux2CLI und die Klein-4B-Modelle in seinem
+   Benutzerkonto. Den Vision-Helfer kompilieren (Xcode Command Line Tools) und beide
+   Helfer auf dem Mac installieren:
    ```bash
    mkdir -p "$HOME/.local/libexec"
+   xcrun swiftc -O scripts/studio-cutout.swift -o "$HOME/.local/libexec/garderobe-studio-cutout"
+   chmod 700 "$HOME/.local/libexec/garderobe-studio-cutout"
    install -m 700 scripts/garderobe-flux.sh "$HOME/.local/libexec/garderobe-flux"
    ```
    Standardpfad ist `/Applications/Flux2CLI`. Bei Bedarf kann das erzwungene SSH-Kommando

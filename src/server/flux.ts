@@ -3,12 +3,12 @@ import { spawn } from "node:child_process";
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
 import { MAX_IMAGE_BYTES } from "../worker/images.ts";
-import type { LocalStudioGenerator } from "../worker/studio.ts";
+import type { LocalStudio, StudioCutout, StudioReference } from "../worker/studio.ts";
 
 const PNG_HEADER = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
 const REMOTE_COMMAND = 'exec /bin/bash "$HOME/.local/libexec/garderobe-flux"';
 
-export function createFluxStudio(env: NodeJS.ProcessEnv): LocalStudioGenerator | undefined {
+export function createFluxStudio(env: NodeJS.ProcessEnv): LocalStudio | undefined {
 	const host = env.FLUX_SSH_HOST?.trim();
 	if (!host) return undefined;
 	const user = env.FLUX_SSH_USER?.trim();
@@ -38,13 +38,13 @@ export function createFluxStudio(env: NodeJS.ProcessEnv): LocalStudioGenerator |
 		"-i", identity, "-l", user, "-p", String(port), "--", host, REMOTE_COMMAND,
 	];
 
-	return async (prompt, image, { width, height }) => {
+	const send = async (mode: "studio" | "cutout", prompt: string, image: StudioReference, width: number, height: number) => {
 		const ext = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }[image.type];
 		if (!ext || !image.data.byteLength || image.data.byteLength > MAX_IMAGE_BYTES) {
 			throw new Error("FLUX braucht ein JPEG-, PNG- oder WebP-Referenzbild bis 12 MB.");
 		}
-		const header = Buffer.from(`${width} ${height} ${ext}\n${prompt.replace(/\s+/g, " ").trim()}\n`);
-		return new Promise<Buffer>((resolve, reject) => {
+		const header = Buffer.from(`${width} ${height} ${ext} ${mode}\n${prompt.replace(/\s+/g, " ").trim()}\n`);
+		return new Promise<StudioCutout>((resolve, reject) => {
 			const child = spawn("ssh", args, { stdio: ["pipe", "pipe", "ignore"] });
 			const chunks: Buffer[] = [];
 			let bytes = 0;
@@ -62,7 +62,7 @@ export function createFluxStudio(env: NodeJS.ProcessEnv): LocalStudioGenerator |
 			});
 			child.stdout.on("data", (chunk: Buffer) => {
 				bytes += chunk.length;
-				if (bytes > MAX_IMAGE_BYTES) stop("Das Studio-Bild vom Mac ist größer als 12 MB.");
+				if (bytes > MAX_IMAGE_BYTES * 2 + 32) stop("Die Ausgabe vom Mac ist zu groß.");
 				else chunks.push(chunk);
 			});
 			child.on("close", (code) => {
@@ -70,13 +70,38 @@ export function createFluxStudio(env: NodeJS.ProcessEnv): LocalStudioGenerator |
 				if (failure) return reject(failure);
 				if (code === 255) return reject(new Error("SSH zum Mac fehlgeschlagen. Prüfe Erreichbarkeit, Schlüssel und Hostschlüssel."));
 				if (code === 69 || code === 127) return reject(new Error("FLUX2CLI oder der SSH-Helfer fehlt auf dem Mac."));
-				if (code !== 0) return reject(new Error("FLUX2CLI konnte kein Studio-Bild erzeugen. Prüfe die Klein-4B-Modelldateien auf dem Mac."));
-				const result = Buffer.concat(chunks, bytes);
-				if (!result.subarray(0, PNG_HEADER.length).equals(PNG_HEADER)) return reject(new Error("Der Mac hat kein gültiges PNG geliefert."));
-				resolve(result);
+				if (code === 73) return reject(new Error("Der Helfer zum Freistellen fehlt auf dem Mac."));
+				if (code === 74) return reject(new Error("Das Kleidungsstück konnte nicht sauber freigestellt werden."));
+				if (code !== 0) return reject(new Error("Der Mac konnte das Studio-Bild nicht verarbeiten."));
+				try {
+					resolve(parseCutout(Buffer.concat(chunks, bytes)));
+				} catch (err) {
+					reject(err);
+				}
 			});
 			child.stdin.write(header);
 			child.stdin.end(Buffer.from(image.data));
 		});
 	};
+	return {
+		generate: (prompt, image, { width, height }) => send("studio", prompt, image, width, height),
+		cutout: (image) => send("cutout", "", image, 0, 0),
+	};
+}
+
+/** Read the full image and thumbnail from a versioned, length-prefixed response. */
+function parseCutout(result: Buffer): StudioCutout {
+	const end = result.indexOf(10);
+	const match = end > 0 && end < 32 && /^GARDEROBE\/2 ([0-9]+)$/.exec(result.toString("ascii", 0, end));
+	if (!match) throw new Error("Der Mac hat keine freigestellten Bilder geliefert. Prüfe den SSH-Helfer.");
+	const fullLength = Number(match[1]);
+	const full = result.subarray(end + 1, end + 1 + fullLength);
+	const thumb = result.subarray(end + 1 + fullLength);
+	for (const png of [full, thumb]) {
+		// RGBA PNG (IHDR color type 6), not an opaque RGB render from an older helper.
+		if (png.length < 33 || png.length > MAX_IMAGE_BYTES || !png.subarray(0, PNG_HEADER.length).equals(PNG_HEADER) || png[25] !== 6) {
+			throw new Error("Der Mac hat kein gültiges PNG mit Alphakanal geliefert.");
+		}
+	}
+	return { full, thumb };
 }

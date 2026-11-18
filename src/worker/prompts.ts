@@ -145,19 +145,22 @@ export function tryOnPromptEn(itemNames: string[]): string {
 }
 
 /** Studio picture from the user's photo (FLUX.2 reference edit). English works best for these models. */
-export function studioPrompt(category: string, kind: string): string {
+export function studioPrompt(category: string, kind: string, forCutout = false): string {
 	const what = kind ? ` (${kind})` : "";
+	const lighting = forCutout
+		? "soft even studio lighting, isolated on a flat uniform light grey matte with zero cast or contact shadow, no floor or horizon, generous clearance around all edges"
+		: "soft diffused studio lighting, subtle soft contact shadow, clean light grey seamless background";
 	const keep =
 		"Keep every detail identical to the reference: exact color, fabric texture, pattern, logo, print, buttons, zipper, seams, wash and fading. Do not add or invent logos, text or decorations.";
 	if (category === "shoes") {
-		return `Professional e-commerce product photo of the exact same pair of shoes${what} as in the reference image, three-quarter side view of the pair, centered, soft diffused studio lighting, subtle soft contact shadow, clean light grey seamless background. ${keep} No person, no feet, no text.`;
+		return `Professional e-commerce product photo of the exact same pair of shoes${what} as in the reference image, three-quarter side view of the pair, centered, ${lighting}. ${keep} No person, no feet, no text.`;
 	}
 	if (category === "socks") {
-		return `Professional e-commerce product photo of the exact same pair of socks${what} as in the reference image, shown on invisible feet so they have natural three-dimensional volume, side view, centered, soft diffused studio lighting, subtle soft contact shadow, clean light grey seamless background. ${keep} No person, no legs visible, no text.`;
+		return `Professional e-commerce product photo of the exact same pair of socks${what} as in the reference image, shown on invisible feet so they have natural three-dimensional volume, side view, centered, ${lighting}. ${keep} No person, no legs visible, no text.`;
 	}
 	if (category === "bag" || category === "accessory" || category === "other") {
-		return `Professional e-commerce product photo of the exact same item${what} as in the reference image, front view, standing upright with natural volume, centered, soft diffused studio lighting, subtle soft contact shadow, clean light grey seamless background. ${keep} No person, no text.`;
+		return `Professional e-commerce product photo of the exact same item${what} as in the reference image, front view, standing upright with natural volume, centered, ${lighting}. ${keep} No person, no text.`;
 	}
 	const shape = category === "bottom" ? "with both legs fully visible" : "with natural shoulders and sleeves";
-	return `Professional e-commerce product photo of the exact same garment${what} as in the reference image, shown on an invisible ghost mannequin so it has natural three-dimensional volume, ${shape}, front view, centered, soft diffused studio lighting, subtle soft contact shadow, clean light grey seamless background. ${keep} No person, no hanger, no mannequin visible, no text.`;
+	return `Professional e-commerce product photo of the exact same garment${what} as in the reference image, shown on an invisible ghost mannequin so it has natural three-dimensional volume, ${shape}, front view, centered, ${lighting}. ${keep} No person, no hanger, no visible mannequin parts or neck stump, no text.`;
 }

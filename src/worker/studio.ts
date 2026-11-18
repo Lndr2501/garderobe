@@ -16,20 +16,23 @@ export interface StudioParams {
 	jobId: string;
 	/** Uploaded JPEG (piece on white) the picture is made from; deleted afterwards. */
 	input: string;
+	/** Existing opaque Studio PNG; only run foreground segmentation, not FLUX again. */
+	repair?: true;
 }
 
 export interface StudioEnv extends ImageEnv {
 	DB: Db;
 	STUDIO?: JobQueue<StudioParams>;
 	LOCAL_STUDIO?: JobQueue<StudioParams>;
-	FLUX_STUDIO?: LocalStudioGenerator;
+	FLUX_STUDIO?: LocalStudio;
 }
 
-export type LocalStudioGenerator = (
-	prompt: string,
-	image: { data: ArrayBuffer; type: string },
-	size: { width: number; height: number },
-) => Promise<Uint8Array>;
+export type StudioReference = { data: ArrayBuffer; type: string };
+export type StudioCutout = { full: Uint8Array; thumb: Uint8Array };
+export interface LocalStudio {
+	generate(prompt: string, image: StudioReference, size: { width: number; height: number }): Promise<StudioCutout>;
+	cutout(image: StudioReference): Promise<StudioCutout>;
+}
 
 export function localStudioAvailable(env: StudioEnv): boolean {
 	return !!(env.LOCAL_STUDIO && env.FLUX_STUDIO);
@@ -85,28 +88,40 @@ export function imageDims(b: Uint8Array): { w: number; h: number } | null {
 }
 
 /** Queues a studio picture for an item (replaces a running one). */
-export async function startStudio(env: StudioEnv, itemId: string, input: string, local = false): Promise<void> {
+export async function startStudio(env: StudioEnv, itemId: string, input: string, local = false, repair = false): Promise<void> {
 	const queue = local ? env.LOCAL_STUDIO : env.STUDIO;
 	const jobId = crypto.randomUUID();
-	await env.DB.prepare(`UPDATE items SET studio_state = 'queued', studio_error = '', studio_input = ?, studio_job = ?, updated_at = ? WHERE id = ?`)
-		.bind(input, jobId, now(), itemId)
-		.run();
+	const guard = repair ? " AND studio_state = 'done' AND thumb_studio IS NULL AND image_studio = ?" : "";
+	const update = await env.DB.prepare(
+		`UPDATE items SET studio_state = 'queued', studio_error = '', studio_input = ?, studio_job = ?, updated_at = ? WHERE id = ?${guard}`,
+	).bind(input, jobId, now(), itemId, ...(repair ? [input] : [])).run();
+	if (!update.meta.changes) return;
 	try {
 		if (!queue) throw new Error("Studio-Bilder sind hier nicht verfügbar");
-		await queue.create({ id: jobId, params: { itemId, jobId, input } });
+		await queue.create({ id: jobId, params: { itemId, jobId, input, ...(repair ? { repair: true } : {}) } });
 	} catch (err) {
 		await env.DB.prepare(`UPDATE items SET studio_state = 'failed', studio_error = ?, studio_input = NULL WHERE id = ? AND studio_job = ?`)
 			.bind(String((err as Error).message).slice(0, 300), itemId, jobId)
 			.run();
-		await deleteImages(env, [input]);
+		if (!repair) await deleteImages(env, [input]);
 	}
 }
 
-/** The local job publishes the PNG directly: a cutout would remove the studio background and shadows. */
-export async function runLocalStudioJob(env: StudioEnv, { itemId, jobId, input }: StudioParams, step: Step): Promise<void> {
+/** Upgrade opaque PNGs made by the original local job without redrawing the garment. */
+export async function repairLegacyStudio(env: StudioEnv): Promise<void> {
+	if (!localStudioAvailable(env)) return;
+	const { results } = await env.DB.prepare(
+		`SELECT id, image_studio FROM items WHERE studio_state = 'done' AND thumb_studio IS NULL
+		 AND image_studio = 'studio/' || studio_job || '.png'
+		 AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id = items.studio_job AND jobs.state IN ('queued', 'running'))`,
+	).all<{ id: string; image_studio: string }>();
+	for (const item of results) await startStudio(env, item.id, item.image_studio, true, true);
+}
+
+export async function runLocalStudioJob(env: StudioEnv, { itemId, jobId, input, repair }: StudioParams, step: Step): Promise<void> {
 	const db = env.DB;
 	try {
-		const key = await step.do("generate-local", async () => {
+		const output = await step.do<{ full: string; thumb: string } | string | null>("generate-local", async () => {
 			const result = await db.prepare(`UPDATE items SET studio_state = 'running', updated_at = ? WHERE id = ? AND studio_job = ?`)
 				.bind(now(), itemId, jobId).run();
 			if (!result.meta.changes) return null;
@@ -115,22 +130,40 @@ export async function runLocalStudioJob(env: StudioEnv, { itemId, jobId, input }
 			if (!env.FLUX_STUDIO) throw new NonRetryableError("Der lokale FLUX-Anbieter ist nicht eingerichtet.");
 			const item = await db.prepare(`SELECT category, subcategory FROM items WHERE id = ?`)
 				.bind(itemId).first<{ category: string; subcategory: string }>();
-			const png = await env.FLUX_STUDIO(studioPrompt(item?.category ?? "", item?.subcategory ?? ""), img, studioSize(item?.category ?? ""));
-			const output = `studio/${jobId}.png`;
-			await putImage(env, output, png, "image/png");
-			return output;
+			const rendered = repair
+				? await env.FLUX_STUDIO.cutout(img)
+				: await env.FLUX_STUDIO.generate(studioPrompt(item?.category ?? "", item?.subcategory ?? "", true), img, studioSize(item?.category ?? ""));
+			const full = newImageKey("image/png", "studio");
+			const thumb = newImageKey("image/png", "studio");
+			await Promise.all([putImage(env, full, rendered.full, "image/png"), putImage(env, thumb, rendered.thumb, "image/png")]);
+			return { full, thumb };
 		});
-		if (!key) return;
+		if (!output) return;
+		// A step completed by the previous version stored just the opaque PNG key.
+		// Finish clipping it instead of publishing it or rerunning FLUX.
+		const { full, thumb } = typeof output === "string"
+			? await step.do("finish-legacy-local", async () => {
+					const img = await getImageBytes(env, output);
+					if (!img || !env.FLUX_STUDIO) throw new Error("Studio-Ausgangsbild fehlt.");
+					const rendered = await env.FLUX_STUDIO.cutout(img);
+					const full = newImageKey("image/png", "studio");
+					const thumb = newImageKey("image/png", "studio");
+					await Promise.all([putImage(env, full, rendered.full, "image/png"), putImage(env, thumb, rendered.thumb, "image/png")]);
+					return { full, thumb };
+				})
+			: output;
 
-		await step.do("publish-local", async () => {
+		await step.do("publish-cutout", async () => {
 			const previous = await db.prepare(`SELECT image_studio, thumb_studio, studio_raw FROM items WHERE id = ? AND studio_job = ?`)
 				.bind(itemId, jobId).first<{ image_studio: string | null; thumb_studio: string | null; studio_raw: string | null }>();
 			const result = await db.prepare(
-				`UPDATE items SET studio_state = 'done', image_studio = ?, thumb_studio = NULL, studio_raw = NULL,
-				 studio_error = '', prefer_original = 0, updated_at = ? WHERE id = ? AND studio_job = ?`,
-			).bind(key, now(), itemId, jobId).run();
-			if (!result.meta.changes) await deleteImages(env, [key]);
-			else if (previous) await deleteImages(env, Object.values(previous).filter((old) => old !== key));
+				`UPDATE items SET studio_state = 'done', image_studio = ?, thumb_studio = ?, studio_raw = NULL,
+				 studio_error = '', prefer_original = CASE WHEN ? THEN prefer_original ELSE 0 END, updated_at = ? WHERE id = ? AND studio_job = ?`,
+			).bind(full, thumb, !!repair, now(), itemId, jobId).run();
+			if (!result.meta.changes) await deleteImages(env, [full, thumb]);
+			// Keep the old opaque render on disk during the upgrade for DB rollback.
+			else if (previous && !repair) await deleteImages(env, Object.values(previous).filter((old) => old !== full && old !== thumb));
+			if (typeof output === "string") await deleteImages(env, [output]);
 		});
 	} catch (err) {
 		const message = err instanceof Error ? err.message : "Studio-Bild fehlgeschlagen.";
@@ -138,7 +171,7 @@ export async function runLocalStudioJob(env: StudioEnv, { itemId, jobId, input }
 			.bind(message.slice(0, 300), now(), itemId, jobId).run();
 	} finally {
 		await step.do("cleanup-local", async () => {
-			await deleteImages(env, [input]);
+			if (!repair) await deleteImages(env, [input]);
 			await db.prepare(`UPDATE items SET studio_input = NULL WHERE id = ? AND studio_input = ?`).bind(itemId, input).run();
 		});
 	}

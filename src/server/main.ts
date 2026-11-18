@@ -8,7 +8,7 @@ import { ensureSchema } from "../worker/db.ts";
 import app, { type Bindings } from "../worker/index.ts";
 import { JobRunner } from "../worker/jobs.ts";
 import type { Background } from "../worker/platform.ts";
-import { runLocalStudioJob, runStudioJob, type StudioParams } from "../worker/studio.ts";
+import { repairLegacyStudio, runLocalStudioJob, runStudioJob, type StudioParams } from "../worker/studio.ts";
 import { runTagJob, type TagParams } from "../worker/tagging.ts";
 import { FileBlobStore } from "./files.ts";
 import { createFluxStudio } from "./flux.ts";
@@ -85,6 +85,8 @@ function publicRequest(req: Request): Request {
 }
 
 await ensureSchema(db);
+// Existing renders need only a quick cutout. Put them ahead of expensive queued generations.
+await repairLegacyStudio(env);
 const resumed = (await jobs.resume()) + (await studioJobs.resume()) + (await localStudioJobs.resume());
 const server = serve({ fetch: (req) => web.fetch(publicRequest(req)), port: PORT, hostname: "0.0.0.0" }, (info) => {
 	console.log(`[garderobe] listening on :${info.port}, data in ${DATA_DIR}${resumed ? `, ${resumed} job(s) resumed` : ""}`);

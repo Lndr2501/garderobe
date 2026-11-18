@@ -4,7 +4,7 @@ import { colorDef } from "../../shared/taxonomy.ts";
 import type { Item } from "../../shared/types.ts";
 import { HangerHook } from "./Hanger.tsx";
 import { imgUrl } from "../api.ts";
-import { frontKey } from "../lib/studio.ts";
+import { frontKey, hasStudio, studioBusy, studioStatusText } from "../lib/studio.ts";
 import { cachedHook, detectHook } from "../lib/hanger.ts";
 import { ItemImage } from "./ItemImage.tsx";
 
@@ -125,7 +125,8 @@ export function Rack({ items, display, onOpen, label }: RackProps) {
 			>
 				{items.map((item, i) => {
 					const thumb = imgUrl(frontKey(item));
-					const ownHanger = display === "hanger" && cachedHook(thumb ? new URL(thumb, location.href).href : undefined) === true;
+					const studio = hasStudio(item) && !item.preferOriginal;
+					const ownHanger = display === "hanger" && !studio && cachedHook(thumb ? new URL(thumb, location.href).href : undefined) === true;
 					return (
 					<button
 						key={item.id}
@@ -136,13 +137,13 @@ export function Rack({ items, display, onOpen, label }: RackProps) {
 						onClick={() => (i === center ? onOpen(item) : scrollToIndex(i))}
 					>
 						<div className="slot-body">
-							<div className={`swing ${ownHanger ? "own-hanger" : ""}`}>
+							<div className={`swing ${studio ? "studio-cutout" : ownHanger ? "own-hanger" : ""}`}>
 								{display === "hanger" && !ownHanger && <HangerHook />}
 								<div className="piece">
 									<ItemImage
 										item={item}
 										onLoad={
-											display === "hanger"
+											display === "hanger" && !studio
 												? (img) => {
 														if (detectHook(img)) setHooks((n) => n + 1);
 													}
@@ -164,7 +165,13 @@ export function Rack({ items, display, onOpen, label }: RackProps) {
 					{current && (
 						<>
 							<div className="name">{current.name || "Ohne Namen"}</div>
-							<div className="sub">{itemSubline(current)}</div>
+							{itemSubline(current) && <div className="sub">{itemSubline(current)}</div>}
+							{studioBusy(current) && (
+								<div className="rack-studio-status" role="status">
+									<span className="spinner" aria-hidden="true" />
+									{studioStatusText(current)}
+								</div>
+							)}
 						</>
 					)}
 					{items.length > 1 && items.length <= 14 && (

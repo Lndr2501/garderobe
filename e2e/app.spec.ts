@@ -251,6 +251,36 @@ test("background removal runs on-device and yields a transparent cut-out", async
 	await page.screenshot({ path: `${SHOTS}/${info.project.name}-bg-removed.png` });
 });
 
+test("studio: rail keeps the original until the transparent cutout is ready", async ({ page }, info) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await login(page);
+	const original = await sharp(await garment("#32496a")).png().toBuffer();
+	const transparent = await sharp(Buffer.from(`<svg width="160" height="180" xmlns="http://www.w3.org/2000/svg"><path d="M50 10h60l40 50-23 25-15-14v95H48V71L33 85 10 60Z" fill="#496188"/></svg>`)).png().toBuffer();
+	const upload = async (buffer: Buffer) => {
+		const res = await page.request.post("/api/images", { multipart: { file: { name: "piece.png", mimeType: "image/png", buffer } } });
+		expect(res.ok()).toBe(true);
+		return (await res.json()).key as string;
+	};
+	const originalKey = await upload(original);
+	const cutoutKey = await upload(transparent);
+	const res = await page.request.post("/api/items", { data: { name: "Studio-Test", category: "top", imageFront: originalKey } });
+	expect(res.ok()).toBe(true);
+	const item = await res.json();
+	let ready = false;
+	await page.route("**/api/items", (route) => route.fulfill({ json: [{ ...item,
+		studioState: ready ? "done" : "running", imageStudio: ready ? cutoutKey : "studio/old.png", thumbStudio: ready ? cutoutKey : null,
+	}] }));
+	await page.goto("/");
+	const garmentImage = page.locator(".rack-slot img");
+	await expect(garmentImage).toHaveAttribute("src", `/api/img/${originalKey}`);
+	await expect(page.locator(".rack-studio-status")).toHaveText(/wird erstellt/);
+	ready = true;
+	await expect(garmentImage).toHaveAttribute("src", `/api/img/${cutoutKey}`, { timeout: 12_000 });
+	await expect(page.locator(".studio-cutout .hook")).toBeVisible();
+	await expect(page.locator(".rack-studio-status")).toHaveCount(0);
+	await page.locator(".rack").screenshot({ path: `${SHOTS}/${info.project.name}-studio-cutout.png`, animations: "disabled" });
+});
+
 test("pwa: manifest, icons and service worker files are served", async ({ request }) => {
 	const m = await request.get("/manifest.webmanifest");
 	expect(m.ok()).toBe(true);

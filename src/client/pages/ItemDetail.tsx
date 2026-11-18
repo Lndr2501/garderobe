@@ -241,12 +241,12 @@ export function ItemDetail() {
 						</div>
 					)}
 					<div className="row wrap" style={{ justifyContent: "center", marginTop: 6, gap: 8 }}>
-						{studioOn && item.imageFront && !showingBack && !studioWorking && (
+						{studioOn && (item.imageFront || item.thumbFront) && !showingBack && !studioWorking && item.studioState !== "failed" && (
 							<button className="btn soft small" onClick={() => void makeStudio()} disabled={!!busy}>
-								<Wand2 size={15} /> {hasStudio(item) ? "Studio neu malen" : "Studio-Bild"}
+								<Wand2 size={15} /> {hasStudio(item) ? "Studio-Bild erneuern" : "Studio-Bild"}
 							</button>
 						)}
-						{showingStudio && (
+						{showingStudio && !studioWorking && (
 							<button className="btn soft small" onClick={() => void dropStudio()} disabled={!!busy}>
 								<Trash2 size={15} /> Studio-Bild löschen
 							</button>

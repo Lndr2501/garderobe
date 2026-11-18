@@ -9,14 +9,16 @@ import { aiJpeg, loadCanvas, processImage } from "./image.ts";
 
 /** Front picture to show: the studio picture unless the user prefers the own photo. */
 export function frontKey(item: Item, size: "thumb" | "full" = "thumb"): string | null {
-	if (!item.preferOriginal && (item.imageStudio || item.thumbStudio)) {
+	if (!item.preferOriginal && hasStudio(item)) {
 		return size === "full" ? (item.imageStudio ?? item.thumbStudio) : (item.thumbStudio ?? item.imageStudio);
 	}
 	return size === "full" ? (item.imageFront ?? item.thumbFront) : (item.thumbFront ?? item.imageFront);
 }
 
 export function hasStudio(item: Item): boolean {
-	return !!(item.imageStudio || item.thumbStudio);
+	// A local PNG without its thumbnail predates the cutout step. Keep showing
+	// the original while the old render is upgraded rather than flashing its rectangle.
+	return !!item.thumbStudio;
 }
 
 /** Being made right now (or waiting for the daily allowance / the finishing step). */
@@ -29,7 +31,7 @@ export function studioStatusText(item: Item): string {
 		case "queued":
 			return "Studio-Bild ist in der Warteschlange";
 		case "running":
-			return "Studio-Bild wird gemalt …";
+			return "Studio-Bild wird erstellt …";
 		case "waiting":
 			return "Studio-Bild wartet aufs Gratis-Kontingent von morgen";
 		case "raw":
@@ -75,9 +77,11 @@ export function useStudioWork(): void {
 			for (const item of todo) {
 				try {
 					const raw = item.studioRaw!;
-					const blob = await (await fetch(imgUrl(raw)!, { credentials: "same-origin" })).blob();
-					const p = await processImage(blob, { removeBg: true, quality, enhance: false });
+					const response = await fetch(imgUrl(raw)!, { credentials: "same-origin" });
+					if (!response.ok) throw new Error("Studio-Bild konnte nicht geladen werden.");
+					const p = await processImage(await response.blob(), { removeBg: true, quality, enhance: false });
 					URL.revokeObjectURL(p.preview);
+					if (!p.alpha) throw new Error("Das Studio-Bild konnte nicht freigestellt werden.");
 					const [imageStudio, thumbStudio] = await Promise.all([uploadImage(p.full), uploadImage(p.thumb)]);
 					put(await api<Item>(`/api/items/${item.id}/studio/done`, { method: "POST", body: { imageStudio, thumbStudio, raw } }));
 				} catch (err) {

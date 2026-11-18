@@ -3,7 +3,7 @@ import { MemoryBlobStore } from "../src/server/files.ts";
 import { SqliteDb } from "../src/server/sqlite.ts";
 import app, { type Bindings } from "../src/worker/index.ts";
 import { JobRunner } from "../src/worker/jobs.ts";
-import { runLocalStudioJob, runStudioJob, type StudioParams } from "../src/worker/studio.ts";
+import { repairLegacyStudio, runLocalStudioJob, runStudioJob, type StudioCutout, type StudioParams } from "../src/worker/studio.ts";
 import { applyTags, type TagParams } from "../src/worker/tagging.ts";
 import type { AppSettings, Item, ShoppingCheckResult, Stats, Trip, WearDay } from "../src/shared/types.ts";
 
@@ -323,13 +323,13 @@ describe("studio pictures", () => {
 		expect(await env.IMAGES.get(input)).toBeNull();
 	});
 
-	it("runs locally without fetching Cloudflare and displays the unmodified PNG after the running state", async () => {
+	it("runs locally without fetching Cloudflare and publishes the full cutout and thumbnail", async () => {
 		const c = await loggedIn();
 		await withStudio(c);
 		const fetchSpy = vi.spyOn(globalThis, "fetch");
-		const output = Promise.withResolvers<Uint8Array>();
+		const output = Promise.withResolvers<StudioCutout>();
 		const generator = vi.fn(() => output.promise);
-		env.FLUX_STUDIO = generator;
+		env.FLUX_STUDIO = { generate: generator, cutout: vi.fn() };
 		const saved = await c.json<AppSettings>("/api/settings", {
 			method: "PATCH",
 			body: { ai: { routes: { studio: { provider: "local-flux" } } } },
@@ -343,18 +343,20 @@ describe("studio pictures", () => {
 			await c.json<Item>(`/api/items/${item.id}/studio`, { body: { image: input } });
 			await expect.poll(async () => (await c.json<Item>(`/api/items/${item.id}`)).studioState).toBe("running");
 			expect(generator).toHaveBeenCalledExactlyOnceWith(
-				expect.stringMatching(/ghost mannequin.*soft contact shadow.*light grey.*Keep every detail/),
+				expect.stringMatching(/ghost mannequin.*zero cast or contact shadow.*Keep every detail/),
 				{ data: PNG_1PX.buffer, type: "image/png" },
 				{ width: 768, height: 1024 },
 			);
 		} finally {
-			output.resolve(PNG_1PX);
+			output.resolve({ full: PNG_1PX, thumb: PNG_1PX });
 			await localStudioRunner.idle();
 		}
 
 		const done = await c.json<Item>(`/api/items/${item.id}`);
 		expect(done).toMatchObject({ studioState: "done", studioRaw: null, imageFront: front, preferOriginal: false });
 		expect(done.imageStudio).toMatch(/^studio\//);
+		expect(done.thumbStudio).toMatch(/^studio\//);
+		expect(done.thumbStudio).not.toBe(done.imageStudio);
 		const image = await c.req(`/api/img/${done.imageStudio}`);
 		expect(image.headers.get("Content-Type")).toBe("image/png");
 		expect(new Uint8Array(await image.arrayBuffer())).toEqual(PNG_1PX);
@@ -364,7 +366,7 @@ describe("studio pictures", () => {
 
 	it("keeps the original and reports a local failure without cloud fallback", async () => {
 		const c = await loggedIn();
-		env.FLUX_STUDIO = async () => { throw new Error("Mac nicht erreichbar"); };
+		env.FLUX_STUDIO = { generate: async () => { throw new Error("Mac nicht erreichbar"); }, cutout: vi.fn() };
 		const fetchSpy = vi.spyOn(globalThis, "fetch");
 		await c.json("/api/settings", { method: "PATCH", body: { ai: { routes: { studio: { provider: "local-flux" } } } } });
 		const imageFront = await upload(c);
@@ -377,6 +379,29 @@ describe("studio pictures", () => {
 		});
 		expect(await env.IMAGES.get(input)).toBeNull();
 		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("repairs old opaque local images without regenerating or changing the original photo preference", async () => {
+		const c = await loggedIn();
+		const front = await upload(c);
+		const item = await c.json<Item>("/api/items", { body: { name: "Pulli", category: "top", imageFront: front } });
+		const oldJob = crypto.randomUUID();
+		const legacy = `studio/${oldJob}.png`;
+		await env.IMAGES.put(legacy, PNG_1PX, "image/png");
+		await env.DB.prepare("UPDATE items SET studio_state = 'done', image_studio = ?, studio_job = ?, prefer_original = 1 WHERE id = ?")
+			.bind(legacy, oldJob, item.id).run();
+		const cutout = vi.fn(async () => ({ full: PNG_1PX, thumb: PNG_1PX }));
+		env.FLUX_STUDIO = { cutout, generate: vi.fn() };
+		await repairLegacyStudio(env);
+		await localStudioRunner.idle();
+		await repairLegacyStudio(env);
+		const done = await c.json<Item>(`/api/items/${item.id}`);
+		expect(cutout).toHaveBeenCalledExactlyOnceWith({ data: PNG_1PX.buffer, type: "image/png" });
+		expect(env.FLUX_STUDIO.generate).not.toHaveBeenCalled();
+		expect(done).toMatchObject({ studioState: "done", imageFront: front, preferOriginal: true });
+		expect(done.thumbStudio).toMatch(/^studio\//);
+		expect(done.imageStudio).not.toBe(legacy);
+		expect(await env.IMAGES.get(legacy)).not.toBeNull();
 	});
 
 	it("generates on Cloudflare, books the usage and hands the raw picture to the app", async () => {

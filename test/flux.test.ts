@@ -35,19 +35,30 @@ cmp "${"$"}{12}" "$FLUX_TEST_DIR/expected.png"
 cp "${"$"}{12}" "$9"
 echo "CLI progress; must not be mixed with PNG on stdout"
 `, { mode: 0o700 });
+		await writeFile(join(dir, "cutout"), `#!/bin/bash
+set -eu
+cp "$1" "$2"
+cp "$1" "$3"
+`, { mode: 0o700 });
 		vi.stubEnv("PATH", `${dir}:${process.env.PATH}`);
 		vi.stubEnv("FLUX_TEST_DIR", dir);
 		vi.stubEnv("FLUX_TEST_HELPER", helper);
 		vi.stubEnv("FLUX2CLI_PATH", join(dir, "Flux2CLI"));
+		vi.stubEnv("GARDE_CUTOUT_PATH", join(dir, "cutout"));
 		expect(createFluxStudio({})).toBeUndefined();
 		expect(() => createFluxStudio({ ...vars, FLUX_SSH_HOST: "-option" })).toThrow();
-		const generate = createFluxStudio(vars)!;
-		expect(await generate(prompt, { data: input, type: "image/png" }, { width: 1024, height: 768 })).toEqual(png);
+		const studio = createFluxStudio(vars)!;
+		expect(await studio.generate(prompt, { data: input, type: "image/png" }, { width: 1024, height: 768 })).toEqual({ full: png, thumb: png });
+		vi.stubEnv("FLUX2CLI_PATH", join(dir, "missing"));
+		expect(await studio.cutout({ data: input, type: "image/png" })).toEqual({ full: png, thumb: png });
 		const args = await readFile(join(dir, "ssh_args"), "utf8");
 		expect(args).toContain("StrictHostKeyChecking=yes\n");
 		expect(args).toContain(`UserKnownHostsFile=${vars.FLUX_SSH_KNOWN_HOSTS}\n`);
 		expect(args).toContain("-l\ntest\n-p\n2222\n--\nmac.test\n");
 		expect(args).not.toContain(prompt);
+		const opaque = Buffer.from(png);
+		opaque[25] = 2;
+		await expect(studio.cutout({ data: Uint8Array.from(opaque).buffer, type: "image/png" })).rejects.toThrow("Alphakanal");
 	} finally {
 		vi.unstubAllEnvs();
 		await rm(dir, { recursive: true, force: true });
