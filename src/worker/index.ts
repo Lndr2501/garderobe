@@ -9,12 +9,10 @@ import {
 	chatJson,
 	chatStream,
 	chatText,
-	EMPTY_AI,
 	imageEdit,
 	imageViaChat,
 	listModels,
 	normalizeBaseUrl,
-	type AiConfig,
 	type ChatMessage,
 } from "./ai.ts";
 import {
@@ -33,6 +31,7 @@ import {
 import {
 	ensureSchema,
 	getSetting,
+	ITEM_COLUMNS,
 	ITEM_SELECT,
 	listItems,
 	newId,
@@ -57,14 +56,18 @@ import {
 	newImageKey,
 	putImage,
 } from "./images.ts";
-import { chatSystemPrompt, packingPrompt, shoppingPrompt, suggestPrompt, taggingPrompt, tryOnPrompt } from "./prompts.ts";
+import { chatSystemPrompt, packingPrompt, shoppingPrompt, suggestPrompt, tryOnPrompt } from "./prompts.ts";
 import { isDate, isObj, sanitizeEntries, sanitizeItem, sanitizeOutfit, str } from "./validate.ts";
+import { LOCKABLE, loadAi, startTagging, tagImage, type TagParams } from "./tagging.ts";
+
+export { TagWorkflow } from "./tagging.ts";
 
 export interface Bindings {
 	DB: D1Database;
 	IMAGES: KVNamespace;
 	BUCKET?: R2Bucket;
 	ALLOW_SETUP?: string;
+	TAGGER?: Workflow<TagParams>;
 }
 
 type Ctx = Context<{ Bindings: Bindings }>;
@@ -225,40 +228,24 @@ async function getItem(db: D1Database, id: string): Promise<Item> {
 
 app.get("/api/items/:id", async (c) => c.json(await getItem(c.env.DB, c.req.param("id"))));
 
-const ITEM_COLUMNS: Record<string, [string, (v: unknown) => unknown]> = {
-	name: ["name", (v) => v],
-	category: ["category", (v) => v],
-	subcategory: ["subcategory", (v) => v],
-	colors: ["colors", (v) => JSON.stringify(v)],
-	colorHex: ["color_hex", (v) => v],
-	material: ["material", (v) => v],
-	pattern: ["pattern", (v) => v],
-	fit: ["fit", (v) => v],
-	styleTags: ["style_tags", (v) => JSON.stringify(v)],
-	seasons: ["seasons", (v) => JSON.stringify(v)],
-	warmth: ["warmth", (v) => v],
-	formality: ["formality", (v) => v],
-	waterproof: ["waterproof", (v) => (v ? 1 : 0)],
-	brand: ["brand", (v) => v],
-	size: ["size", (v) => v],
-	price: ["price", (v) => v],
-	purchasedAt: ["purchased_at", (v) => v],
-	notes: ["notes", (v) => v],
-	imageFront: ["image_front", (v) => v],
-	thumbFront: ["thumb_front", (v) => v],
-	imageBack: ["image_back", (v) => v],
-	thumbBack: ["thumb_back", (v) => v],
-	favorite: ["favorite", (v) => (v ? 1 : 0)],
-	status: ["status", (v) => v],
-	needsReview: ["needs_review", (v) => (v ? 1 : 0)],
-};
+/** Field names the client says the user set by hand (only lockable ones). */
+function lockList(raw: unknown): string[] {
+	return Array.isArray(raw) ? [...new Set(raw.filter((k): k is string => typeof k === "string" && LOCKABLE.has(k)))] : [];
+}
+
+/** A freshly uploaded AI helper image (JPEG) – must exist and be a valid key. */
+function aiImageKey(raw: unknown): string | undefined {
+	return typeof raw === "string" && isValidKey(raw) ? raw : undefined;
+}
 
 app.post("/api/items", async (c) => {
-	const input = sanitizeItem(await body(c));
+	const b = await body(c);
+	const input = sanitizeItem(b);
 	const id = newId();
 	const t = now();
-	const cols = ["id", "created_at", "updated_at"];
-	const vals: unknown[] = [id, t, t];
+	const lock = lockList(b.lock);
+	const cols = ["id", "created_at", "updated_at", "user_fields"];
+	const vals: unknown[] = [id, t, t, JSON.stringify(lock)];
 	if (!input.category) input.category = "other";
 	for (const [k, v] of Object.entries(input)) {
 		const def = ITEM_COLUMNS[k];
@@ -269,15 +256,43 @@ app.post("/api/items", async (c) => {
 	await c.env.DB.prepare(`INSERT INTO items (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`)
 		.bind(...vals)
 		.run();
+	const aiImage = aiImageKey(b.aiImage);
+	if (aiImage) {
+		if (aiConfigured(await loadAi(c.env.DB))) await startTagging(c.env, { itemId: id, aiImage, colorHint: str(b.colorHint, 40) });
+		else c.executionCtx.waitUntil(deleteImages(c.env, [aiImage]));
+	}
 	return c.json(await getItem(c.env.DB, id), 201);
+});
+
+/** Runs the AI recognition again (or for the first time) with a fresh helper image from the client. */
+app.post("/api/items/:id/retag", async (c) => {
+	const id = c.req.param("id");
+	await getItem(c.env.DB, id);
+	const b = await body(c);
+	const aiImage = aiImageKey(b.aiImage);
+	if (!aiImage) throw new HttpError(400, "Bild für die Erkennung fehlt");
+	if (!aiConfigured(await loadAi(c.env.DB))) {
+		c.executionCtx.waitUntil(deleteImages(c.env, [aiImage]));
+		throw new HttpError(400, "Keine KI eingerichtet (Einstellungen → KI).");
+	}
+	// "Neu erkennen" means: let the AI decide again, also over fields the user had set.
+	if (b.unlock === true) await c.env.DB.prepare(`UPDATE items SET user_fields = '[]' WHERE id = ?`).bind(id).run();
+	await startTagging(c.env, { itemId: id, aiImage, colorHint: str(b.colorHint, 40) });
+	return c.json(await getItem(c.env.DB, id));
 });
 
 app.patch("/api/items/:id", async (c) => {
 	const id = c.req.param("id");
 	const before = await getItem(c.env.DB, id);
-	const input = sanitizeItem(await body(c));
+	const b = await body(c);
+	const input = sanitizeItem(b);
 	const sets: string[] = [];
 	const vals: unknown[] = [];
+	const lock = lockList(b.lock);
+	if (lock.length) {
+		sets.push("user_fields = ?");
+		vals.push(JSON.stringify([...new Set([...before.userFields, ...lock])]));
+	}
 	for (const [k, v] of Object.entries(input)) {
 		const def = ITEM_COLUMNS[k];
 		if (!def) continue;
@@ -474,10 +489,6 @@ const DEFAULT_SETTINGS: StoredSettings = {
 	personPhoto: null,
 };
 
-async function loadAi(db: D1Database): Promise<AiConfig> {
-	return { ...EMPTY_AI, ...(await getSetting<Partial<AiConfig>>(db, "ai", {})) };
-}
-
 async function loadSettings(db: D1Database): Promise<AppSettings> {
 	const s = { ...DEFAULT_SETTINGS, ...(await getSetting<Partial<StoredSettings>>(db, "app", {})) };
 	const ai = await loadAi(db);
@@ -580,31 +591,9 @@ function dataUrlFrom(v: unknown): string {
 app.post("/api/ai/tag", async (c) => {
 	const b = await body(c);
 	const image = dataUrlFrom(b.image);
-	const hint = str(b.colorHint, 40);
 	const ai = await loadAi(c.env.DB);
-	const ask = hint
-		? `Analysiere dieses Kleidungsstück. Hinweis aus der Pixelanalyse: Die häufigste Farbe ähnelt „${hint}“ (kann durch Licht verfälscht sein).`
-		: "Analysiere dieses Kleidungsstück.";
-	const raw = await chatJson<Record<string, unknown>>(
-		ai,
-		[
-			{ role: "system", content: taggingPrompt() },
-			{
-				role: "user",
-				content: [
-					{ type: "text", text: ask },
-					{ type: "image_url", image_url: { url: image, detail: "high" } },
-				],
-			},
-		],
-		{ model: ai.visionModel || ai.model, temperature: 0.2, maxTokens: 1500 },
-	);
-	const tags = sanitizeItem(raw);
-	delete tags.imageFront;
-	delete tags.thumbFront;
-	delete tags.imageBack;
-	delete tags.thumbBack;
-	return c.json(tags);
+	const { tags, rotate } = await tagImage(ai, image, str(b.colorHint, 40));
+	return c.json({ ...tags, rotate });
 });
 
 function weatherText(w: Record<string, unknown>): string {
@@ -978,6 +967,8 @@ app.post("/api/maintenance/cleanup", async (c) => {
 	const { results: tryons } = await c.env.DB.prepare(`SELECT image FROM tryons`).all<{ image: string }>();
 	const used = new Set<string>();
 	for (const i of items) for (const k of [i.imageFront, i.thumbFront, i.imageBack, i.thumbBack]) if (k) used.add(k);
+	const { results: pendingAi } = await c.env.DB.prepare(`SELECT ai_image FROM items WHERE ai_image IS NOT NULL`).all<{ ai_image: string }>();
+	for (const r of pendingAi) used.add(r.ai_image);
 	for (const t of tryons) used.add(t.image);
 	if (settings.personPhoto) used.add(settings.personPhoto);
 	const keys = await listImageKeys(c.env);

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { colorHarmony, packingList, seededRandom, suggestOutfits, targetWarmth } from "../src/shared/rules.ts";
 import type { Item } from "../src/shared/types.ts";
 import { chatText, EMPTY_AI, extractJson, normalizeBaseUrl, ThinkFilter } from "../src/worker/ai.ts";
+import { rotationFor } from "../src/worker/tagging.ts";
 
 function item(p: Partial<Item>): Item {
 	return {
@@ -31,6 +32,10 @@ function item(p: Partial<Item>): Item {
 		favorite: false,
 		status: "active",
 		needsReview: false,
+		aiState: "",
+		aiError: "",
+		userFields: [],
+		rotate: 0,
 		createdAt: "",
 		updatedAt: "",
 		wearCount: 0,
@@ -144,5 +149,20 @@ describe("thinking switch", () => {
 		} finally {
 			vi.unstubAllGlobals();
 		}
+	});
+});
+
+describe("upright rotation from the AI anchor", () => {
+	it("turns tops and trousers so collar/waistband is on top, shoes so the sole is at the bottom", () => {
+		expect(rotationFor("top", "oben")).toBe(0);
+		expect(rotationFor("top", "links")).toBe(90);
+		expect(rotationFor("bottom", "rechts")).toBe(270);
+		expect(rotationFor("top", "unten")).toBe(180);
+		expect(rotationFor("shoes", "rechts")).toBe(90);
+		expect(rotationFor("shoes", "links")).toBe(270);
+		expect(rotationFor("shoes", "unten")).toBe(0);
+		expect(rotationFor("bag", "links")).toBe(0);
+		expect(rotationFor("top", "quer")).toBe(0);
+		expect(rotationFor(undefined, "links")).toBe(0);
 	});
 });

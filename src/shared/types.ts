@@ -27,6 +27,13 @@ export interface Item {
 	favorite: boolean;
 	status: "active" | "archived";
 	needsReview: boolean;
+	/** Server-side AI recognition: "" = never ran, pending, done, failed. */
+	aiState: "" | "pending" | "done" | "failed";
+	aiError: string;
+	/** Fields the user set by hand – the AI never overwrites them. */
+	userFields: string[];
+	/** Clockwise rotation (deg) the client still has to apply to the photos. */
+	rotate: number;
 	createdAt: string;
 	updatedAt: string;
 	/** Derived from the wear log. */
@@ -35,8 +42,17 @@ export interface Item {
 }
 
 export type ItemInput = Partial<
-	Omit<Item, "id" | "createdAt" | "updatedAt" | "wearCount" | "lastWorn">
+	Omit<Item, "id" | "createdAt" | "updatedAt" | "wearCount" | "lastWorn" | "aiState" | "aiError" | "userFields">
 >;
+
+/** What the client sends when creating/updating an item. */
+export type ItemPayload = ItemInput & {
+	/** Fields the user set by hand – the AI will not overwrite them. */
+	lock?: string[];
+	/** Uploaded JPEG for the server-side AI recognition (create only). */
+	aiImage?: string;
+	colorHint?: string;
+};
 
 export interface Outfit {
 	id: string;

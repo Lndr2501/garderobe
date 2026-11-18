@@ -32,32 +32,40 @@ export function wardrobeSummary(items: Item[], limit = 400): string {
 export const WARDROBE_FORMAT =
 	"Format je Zeile: ID | Name | Kategorie | Farben | Muster | Wärme 1-5 | Formalität 1-5 | Saisons | Stil | (wasserdicht) | Tragehistorie | ★=Favorit";
 
+/**
+ * Recognition prompt for one garment photo. Tested against real phone photos (flat lays on a bed,
+ * rotated or upside down): the "anker" field tells where collar / waistband / sole is, which the
+ * worker turns into a rotation so every piece hangs upright.
+ */
 export function taggingPrompt(): string {
-	return `Du bist ein Mode-Experte und katalogisierst Kleidung für eine digitale Garderobe.
-Analysiere das Kleidungsstück auf dem Bild und antworte NUR mit einem JSON-Objekt (keine Erklärung, kein Markdown):
-{
-  "name": "kurzer, natürlicher deutscher Name, max. 4 Wörter, z.B. \\"Creme Teddy-Jacke\\" oder \\"Blaue Jeansjacke\\"",
-  "category": eine von [${CATEGORIES.map((c) => `"${c.key}"`).join(", ")}],
-  "subcategory": "genauer Typ auf Deutsch, z.B. Hoodie, Chino, Sneaker",
-  "colors": Liste der Farben, Hauptfarbe zuerst, nur aus [${COLORS.map((c) => `"${c.key}"`).join(", ")}],
-  "material": "vermutetes Material auf Deutsch, z.B. Baumwolle, Wolle, Denim, Leder, Fleece",
-  "pattern": eine von [${PATTERNS.map((p) => `"${p}"`).join(", ")}],
-  "fit": "Schnitt/Passform auf Deutsch, z.B. oversized, regular, slim, boxy, cropped",
-  "styleTags": passende aus [${STYLE_TAGS.map((s) => `"${s}"`).join(", ")}],
-  "seasons": passende aus [${SEASONS.map((s) => `"${s.key}"`).join(", ")}],
-  "warmth": Zahl 1-5 (1 = sehr leicht/Sommer, 5 = sehr warm/Winter),
-  "formality": Zahl 1-5 (1 = sportlich, 2 = lässig, 3 = smart casual, 4 = schick, 5 = formell),
-  "waterproof": true/false,
-  "brand": "Marke, nur wenn sichtbar, sonst leer"
-}
-Kategorien: ${CATEGORIES.map((c) => `${c.key} = ${c.label} (${c.examples})`).join("; ")}.
+	return `Du katalogisierst Kleidung für eine digitale Garderobe. Das Foto zeigt EIN Teil, oft flach auf Bett oder Boden fotografiert und dabei gedreht oder auf dem Kopf.
+Antworte NUR mit JSON, ohne Erklärung:
+{"category":"...","subcategory":"...","anker":"...","name":"...","colors":[...],"material":"...","pattern":"...","fit":"...","brand":"","styleTags":[...],"seasons":[...],"warmth":3,"formality":2,"waterproof":false}
 
-So gehst du vor:
-- Schau genau hin: Kragen (Rundhals, V, Polo, Half-Zip, Kapuze), Ärmellänge, Verschlüsse, Taschen, Bündchen, Strickstruktur. Nenne das Teil so, wie man es im Laden nennen würde (z.B. "Navy Half-Zip Pullover", "Graues Rundhals-Shirt").
-- Farben: Fotos sind oft zu dunkel oder farbstichig. Unterscheide sorgfältig schwarz vs. navy vs. dunkelgrau und weiss vs. creme vs. beige. Nimm die Farbe, die das Teil bei Tageslicht hätte.
-- Material aus der Oberfläche ableiten: Strick/Maschen = Wolle oder Baumwolle-Strick, glatt glänzend = Polyester/Nylon, Köper mit Naht = Denim.
-- Marke nur angeben, wenn ein Logo oder Etikett lesbar ist. Nicht raten.
-- Ein Bügel, eine Hand oder Reste vom Hintergrund gehören nicht zum Kleidungsstück.`;
+category (genau einer):
+- "top" = Oberteil: T-Shirt, Polo, Hemd, Bluse, Pullover, Strickpullover, Half-Zip, Hoodie, Sweatshirt, Top
+- "outerwear" = Jacke, Mantel, Blazer, Weste, Fleece-Jacke (vorne komplett zu öffnen)
+- "bottom" = Hose, Jeans, Chino, Jogginghose, Shorts, Rock
+- "dress" = Kleid, Jumpsuit, Overall
+- "shoes" = Sneaker, Stiefel, Hausschuh, Slipper, Sandale, Halbschuh (auch ein einzelner Schuh)
+- "bag" = Tasche, Rucksack
+- "accessory" = Mütze, Cap, Schal, Gürtel, Schmuck, Uhr, Brille
+- "other" nur wenn nichts davon passt
+
+anker = auf welcher Bildseite liegt der Anker des Teils: "oben", "unten", "links" oder "rechts".
+- Oberteil, Jacke, Kleid: Anker = Kragen/Halsausschnitt.
+- Hose, Rock: Anker = Bund (Hosenbund mit Knopf/Gürtelschlaufen), die Beine zeigen weg davon.
+- Schuh: Anker = Sohle.
+Schau zuerst, wo Kragen, Bund oder Sohle im Bild ist, dann antworte.
+
+subcategory: genauer Typ auf Deutsch (z.B. T-Shirt, Strickpullover, Half-Zip Pullover, Jeans, Sneaker, Hausschuh).
+name: wie im Laden, max. 4 Wörter, Farbe + Typ, z.B. "Navy Zopfstrick-Pullover", "Helle Wide-Leg Jeans", "Asics Sneaker Creme-Bordeaux".
+colors: Hauptfarbe zuerst, nur aus [${COLORS.map((c) => `"${c.key}"`).join(",")}]. Fotos sind oft zu dunkel: unterscheide schwarz/navy/anthrazit sorgfältig.
+pattern: einer von [${PATTERNS.map((p) => `"${p}"`).join(",")}].
+brand: nur wenn Logo/Etikett lesbar, sonst "".
+styleTags aus [${STYLE_TAGS.map((t) => `"${t}"`).join(",")}]; seasons aus [${SEASONS.map((x) => `"${x.key}"`).join(",")}].
+warmth 1-5 (1 Sommer, 5 Winter); formality 1-5 (1 sportlich, 3 smart casual, 5 formell).
+Ein Bügel, eine Hand oder Reste vom Hintergrund gehören nicht zum Teil.`;
 }
 
 export function suggestPrompt(

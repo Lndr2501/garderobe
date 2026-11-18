@@ -10,8 +10,10 @@ export const THUMB_DIM = 640;
 export interface ProcessedImage {
 	full: Blob;
 	thumb: Blob;
-	/** Small JPEG on white as data URL, for AI vision requests. */
-	ai: string;
+	/** JPEG on a light background for the vision model (untouched colors, ≤1024 px). */
+	aiBlob: Blob;
+	/** Whether the stored images have transparency (cut-out). */
+	alpha: boolean;
 	colorHex: string;
 	preview: string;
 	bgRemoved: boolean;
@@ -157,16 +159,44 @@ export async function encodePair(c: HTMLCanvasElement, alpha: boolean): Promise<
 	return { full, thumb };
 }
 
-function aiDataUrl(c: HTMLCanvasElement, maxDim = 1024): string {
+/** Light grey (not white) so white garments stay visible to the model. */
+const AI_BACKGROUND = "#ebebeb";
+
+/** JPEG for the vision model: cut-out on a light background, max 1024 px. */
+export async function aiJpeg(c: HTMLCanvasElement, maxDim = 1024): Promise<Blob> {
 	const scaled = toCanvas(c, maxDim);
 	const out = document.createElement("canvas");
 	out.width = scaled.width;
 	out.height = scaled.height;
 	const ctx = out.getContext("2d")!;
-	ctx.fillStyle = "#ffffff";
+	ctx.fillStyle = AI_BACKGROUND;
 	ctx.fillRect(0, 0, out.width, out.height);
 	ctx.drawImage(scaled, 0, 0);
-	return out.toDataURL("image/jpeg", 0.85);
+	const blob = await canvasBlob(out, "image/jpeg", 0.85);
+	if (!blob) throw new Error("Bild für die KI konnte nicht erstellt werden");
+	return blob;
+}
+
+/** Returns a new canvas turned clockwise by 0/90/180/270 degrees. */
+export function rotateCanvas(c: HTMLCanvasElement, deg: number): HTMLCanvasElement {
+	const d = ((deg % 360) + 360) % 360;
+	if (!d) return c;
+	const out = document.createElement("canvas");
+	const swap = d === 90 || d === 270;
+	out.width = swap ? c.height : c.width;
+	out.height = swap ? c.width : c.height;
+	const ctx = out.getContext("2d")!;
+	ctx.translate(out.width / 2, out.height / 2);
+	ctx.rotate((d * Math.PI) / 180);
+	ctx.drawImage(c, -c.width / 2, -c.height / 2);
+	return out;
+}
+
+/** Loads a stored/processed image, turns it and re-encodes full + thumbnail. */
+export async function rotateImage(src: string | Blob, deg: number): Promise<{ full: Blob; thumb: Blob }> {
+	const c = await loadCanvas(src, 1600);
+	const alpha = hasTransparency(c);
+	return encodePair(rotateCanvas(c, deg), alpha);
 }
 
 /** Most common color among opaque pixels (center region if the image has a background). */
@@ -276,11 +306,11 @@ export async function processImage(file: Blob, opts: ProcessOptions): Promise<Pr
 	if (hasAlpha) canvas = trimTransparent(canvas);
 	// Color + AI image from the untouched pixels, the stored image gets the enhancement.
 	const colorHex = dominantColor(canvas, hasAlpha);
-	const ai = aiDataUrl(canvas);
+	const aiBlob = await aiJpeg(canvas);
 	if (opts.enhance) autoEnhance(canvas, hasAlpha);
 	const { full, thumb } = await encodePair(canvas, hasAlpha);
 	opts.onProgress?.("fertig", 1);
-	return { full, thumb, ai, colorHex, preview: URL.createObjectURL(full), bgRemoved };
+	return { full, thumb, aiBlob, alpha: hasAlpha, colorHex, preview: URL.createObjectURL(full), bgRemoved };
 }
 
 /** Loads a stored image (URL or blob) into a canvas for editing. */
@@ -310,7 +340,7 @@ export async function prepareImage(file: Blob, maxDim = 1400): Promise<{ blob: B
 	const d = await loadDrawable(file);
 	const c = toCanvas(d, maxDim);
 	const blob = (await canvasBlob(c, "image/jpeg", 0.88)) ?? file;
-	return { blob, dataUrl: aiDataUrl(c, 1024) };
+	return { blob, dataUrl: toCanvas(c, 1024).toDataURL("image/jpeg", 0.85) };
 }
 
 export function isImageFile(f: File): boolean {

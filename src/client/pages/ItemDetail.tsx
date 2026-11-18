@@ -1,10 +1,10 @@
-import { Archive, ArchiveRestore, ArrowLeft, Camera, Check, Eraser, Heart, Pencil, Sparkles, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeft, Camera, Check, Eraser, Heart, Pencil, RefreshCw, RotateCw, Sparkles, Trash2, TriangleAlert } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import { pairingItems } from "../../shared/rules.ts";
 import { categoryDef, colorDef, FORMALITY_LABELS, SEASONS, WARMTH_LABELS } from "../../shared/taxonomy.ts";
 import type { Item } from "../../shared/types.ts";
-import { uploadImage } from "../api.ts";
+import { imgUrl, uploadImage } from "../api.ts";
 import { Meter, swatchStyle } from "../components/Inputs.tsx";
 import { ImageEditor } from "../components/ImageEditor.tsx";
 import { ItemImage } from "../components/ItemImage.tsx";
@@ -12,9 +12,11 @@ import { PageHead } from "../components/Layout.tsx";
 import { errorText, useToast } from "../components/Toast.tsx";
 import { daysBetween, localDate, relativeDays } from "../lib/date.ts";
 import { money } from "../lib/format.ts";
-import { processImage } from "../lib/image.ts";
+import { processImage, rotateImage } from "../lib/image.ts";
+import { isRecognizing, recognitionFailed, retagItem } from "../lib/recognize.ts";
+import { useQueryClient } from "@tanstack/react-query";
 import { useLocal } from "../lib/useLocal.ts";
-import { useDeleteItem, useItems, useOutfits, useSaveItem, useSetWear, useSettings, useTodayWear } from "../queries.ts";
+import { keys, useDeleteItem, useItems, useOutfits, useSaveItem, useSetWear, useSettings, useTodayWear } from "../queries.ts";
 import { OutfitCollage } from "../components/OutfitCollage.tsx";
 
 export function ItemDetail() {
@@ -35,6 +37,7 @@ export function ItemDetail() {
 	const backInput = useRef<HTMLInputElement>(null);
 	const [editing, setEditing] = useState<"front" | "back" | null>(null);
 	const [enhance] = useLocal("gd-enhance", true);
+	const qc = useQueryClient();
 
 	const pairs = useMemo(() => (item && items ? pairingItems(items, item.category, item.colors, item.pattern).slice(0, 12) : []), [item, items]);
 	const inOutfits = (outfits ?? []).filter((o) => item && o.itemIds.includes(item.id));
@@ -93,6 +96,41 @@ export function ItemDetail() {
 	};
 
 	const cat = categoryDef(item.category);
+	const recognizing = isRecognizing(item);
+	const failed = recognitionFailed(item);
+	const aiOn = !!settings?.ai.configured;
+
+	const turn = async () => {
+		const side = flipped && item.imageBack ? "back" : "front";
+		const key = side === "back" ? item.imageBack : item.imageFront;
+		if (!key) return;
+		setBusy("Wird gedreht …");
+		try {
+			const { full, thumb } = await rotateImage(imgUrl(key)!, 90);
+			const [f, t] = await Promise.all([uploadImage(full), uploadImage(thumb)]);
+			await save.mutateAsync({
+				id: item.id,
+				data: side === "back" ? { imageBack: f, thumbBack: t } : { imageFront: f, thumbFront: t, rotate: 0, lock: ["rotate"] },
+			});
+		} catch (e) {
+			toast(errorText(e), "error");
+		} finally {
+			setBusy("");
+		}
+	};
+
+	const recognize = async () => {
+		setBusy("KI wird gefragt …");
+		try {
+			await retagItem(item, true);
+			await qc.invalidateQueries({ queryKey: keys.items });
+			toast("KI schaut sich das Teil nochmal an", "ok");
+		} catch (e) {
+			toast(errorText(e), "error");
+		} finally {
+			setBusy("");
+		}
+	};
 
 	return (
 		<div className="container page">
@@ -133,7 +171,28 @@ export function ItemDetail() {
 							)}
 						</div>
 					</button>
+					{(recognizing || failed) && (
+						<div className={`ai-note ${failed ? "warn" : ""}`} role="status">
+							{recognizing ? <span className="spinner" style={{ width: 15, height: 15 }} /> : <TriangleAlert size={15} />}
+							<span>{recognizing ? "KI erkennt das Teil … (20 s bis 2 Min)" : `Nicht erkannt: ${item.aiError || "keine Antwort"}`}</span>
+							{failed && (
+								<button className="btn small" onClick={() => void recognize()} disabled={!!busy}>
+									Nochmal
+								</button>
+							)}
+						</div>
+					)}
 					<div className="row wrap" style={{ justifyContent: "center", marginTop: 6, gap: 8 }}>
+						{(item.imageFront || item.imageBack) && (
+							<button className="btn soft small" onClick={() => void turn()} disabled={!!busy}>
+								<RotateCw size={15} /> Drehen
+							</button>
+						)}
+						{aiOn && item.imageFront && !recognizing && (
+							<button className="btn soft small" onClick={() => void recognize()} disabled={!!busy}>
+								<RefreshCw size={15} /> Neu erkennen
+							</button>
+						)}
 						{item.imageBack ? (
 							<span className="small faint">Tippen zum Umdrehen ({flipped ? "Rückseite" : "Vorderseite"})</span>
 						) : (

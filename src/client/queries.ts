@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import type {
 	AppSettings,
 	Item,
-	ItemInput,
+	ItemPayload,
 	Outfit,
 	OutfitInput,
 	OutfitSuggestion,
@@ -29,7 +29,12 @@ export const keys = {
 };
 
 export function useItems() {
-	return useQuery({ queryKey: keys.items, queryFn: () => api<Item[]>("/api/items") });
+	return useQuery({
+		queryKey: keys.items,
+		queryFn: () => api<Item[]>("/api/items"),
+		// While the server recognizes new pieces, look for results every few seconds.
+		refetchInterval: (q) => (q.state.data?.some((i) => i.aiState === "pending" && Date.now() - Date.parse(i.updatedAt) < 12 * 60_000) ? 4000 : false),
+	});
 }
 
 export function useItemMap(): Map<string, Item> {
@@ -45,7 +50,7 @@ export function useActiveItems(): Item[] {
 export function useSaveItem() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: ({ id, data }: { id?: string; data: ItemInput }) =>
+		mutationFn: ({ id, data }: { id?: string; data: ItemPayload }) =>
 			id ? api<Item>(`/api/items/${id}`, { method: "PATCH", body: data }) : api<Item>("/api/items", { method: "POST", body: data }),
 		onSuccess: (item) => {
 			qc.setQueryData<Item[]>(keys.items, (old) => {

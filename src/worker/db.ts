@@ -77,6 +77,14 @@ const MIGRATIONS: string[][] = [
 		`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS login_attempts (ip TEXT PRIMARY KEY, count INTEGER NOT NULL, first_at INTEGER NOT NULL)`,
 	],
+	[
+		// Server-side AI recognition: state, fields the user set by hand, pending rotation.
+		`ALTER TABLE items ADD COLUMN ai_state TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE items ADD COLUMN ai_error TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE items ADD COLUMN ai_image TEXT`,
+		`ALTER TABLE items ADD COLUMN user_fields TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE items ADD COLUMN rotate INTEGER NOT NULL DEFAULT 0`,
+	],
 ];
 
 let migrated: Promise<void> | null = null;
@@ -150,6 +158,11 @@ export interface ItemRow {
 	favorite: number;
 	status: string;
 	needs_review: number;
+	ai_state?: string;
+	ai_error?: string;
+	ai_image?: string | null;
+	user_fields?: string;
+	rotate?: number;
 	created_at: string;
 	updated_at: string;
 	wear_count?: number | null;
@@ -184,12 +197,46 @@ export function rowToItem(r: ItemRow): Item {
 		favorite: r.favorite === 1,
 		status: r.status === "archived" ? "archived" : "active",
 		needsReview: r.needs_review === 1,
+		aiState: (["pending", "done", "failed"].includes(r.ai_state ?? "") ? r.ai_state : "") as Item["aiState"],
+		aiError: r.ai_error ?? "",
+		userFields: parseJson<string[]>(r.user_fields, []),
+		rotate: r.rotate ?? 0,
 		createdAt: r.created_at,
 		updatedAt: r.updated_at,
 		wearCount: r.wear_count ?? 0,
 		lastWorn: r.last_worn ?? null,
 	};
 }
+
+/** API field → [column, encoder]. */
+export const ITEM_COLUMNS: Record<string, [string, (v: unknown) => unknown]> = {
+	name: ["name", (v) => v],
+	category: ["category", (v) => v],
+	subcategory: ["subcategory", (v) => v],
+	colors: ["colors", (v) => JSON.stringify(v)],
+	colorHex: ["color_hex", (v) => v],
+	material: ["material", (v) => v],
+	pattern: ["pattern", (v) => v],
+	fit: ["fit", (v) => v],
+	styleTags: ["style_tags", (v) => JSON.stringify(v)],
+	seasons: ["seasons", (v) => JSON.stringify(v)],
+	warmth: ["warmth", (v) => v],
+	formality: ["formality", (v) => v],
+	waterproof: ["waterproof", (v) => (v ? 1 : 0)],
+	brand: ["brand", (v) => v],
+	size: ["size", (v) => v],
+	price: ["price", (v) => v],
+	purchasedAt: ["purchased_at", (v) => v],
+	notes: ["notes", (v) => v],
+	imageFront: ["image_front", (v) => v],
+	thumbFront: ["thumb_front", (v) => v],
+	imageBack: ["image_back", (v) => v],
+	thumbBack: ["thumb_back", (v) => v],
+	favorite: ["favorite", (v) => (v ? 1 : 0)],
+	status: ["status", (v) => v],
+	needsReview: ["needs_review", (v) => (v ? 1 : 0)],
+	rotate: ["rotate", (v) => v],
+};
 
 export const ITEM_SELECT = `SELECT i.*, w.wear_count, w.last_worn FROM items i
 	LEFT JOIN (SELECT item_id, COUNT(*) AS wear_count, MAX(date) AS last_worn FROM wears GROUP BY item_id) w

@@ -17,7 +17,7 @@ function reply(body) {
 	const ids = [...new Set(all.match(UUID) ?? [])];
 	if (all.includes("Bereit!")) return "Bereit!";
 	if (all.includes("Analysiere")) {
-		return JSON.stringify({ name: "Rote Strickjacke", category: "outerwear", subcategory: "Cardigan", colors: ["rot"], material: "Wolle", pattern: "uni", warmth: 4, formality: 2, seasons: ["herbst", "winter"], styleTags: ["casual"] });
+		return JSON.stringify({ name: "Rote Strickjacke", anker: "links", category: "outerwear", subcategory: "Cardigan", colors: ["rot"], material: "Wolle", pattern: "uni", warmth: 4, formality: 2, seasons: ["herbst", "winter"], styleTags: ["casual"] });
 	}
 	if (all.includes('{"outfits"')) {
 		return "<think>überlege…</think>" + JSON.stringify({ outfits: [{ name: "KI-Kombi", itemIds: ids.slice(0, 2), reason: "Vom Mock-Stylisten" }] });

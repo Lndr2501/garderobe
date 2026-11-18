@@ -27,20 +27,43 @@ async function login(page: Page) {
 	await expect(page.getByLabel("Teil hinzufügen")).toBeVisible();
 }
 
-async function addItem(page: Page, name: string, color: string, category = "Oberteile") {
+interface ApiItem {
+	id: string;
+	name: string;
+	createdAt: string;
+	imageFront: string;
+	aiState: string;
+	rotate: number;
+}
+
+async function newestItem(page: Page): Promise<ApiItem> {
+	const items = (await (await page.request.get("/api/items")).json()) as ApiItem[];
+	return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!;
+}
+
+/** Adds one photo on the "Neue Teile" page and saves it; returns the created item. */
+async function addPhoto(page: Page, file: { name: string; buffer: Buffer }, opts: { removeBg?: boolean; category?: string; timeout?: number } = {}): Promise<ApiItem> {
 	await page.goto("/neu");
+	await page.getByRole("button", { name: "Optionen" }).click();
 	const bg = page.getByRole("switch", { name: "Hintergrund entfernen" });
-	if ((await bg.getAttribute("aria-checked")) === "true") await bg.click();
-	await page.locator('input[type="file"][multiple]').setInputFiles({ name: "teil.jpg", mimeType: "image/jpeg", buffer: await garment(color) });
-	const nameInput = page.getByPlaceholder("z.B. Creme Teddy-Jacke");
-	await expect(nameInput).toBeVisible();
-	const save = page.getByRole("button", { name: "Speichern" });
-	await expect(save).toBeVisible();
-	await nameInput.fill(name);
-	const chip = page.getByRole("button", { name: category, exact: true });
-	if ((await chip.getAttribute("aria-pressed")) !== "true") await chip.click();
+	if ((await bg.getAttribute("aria-checked")) !== String(!!opts.removeBg)) await bg.click();
+	await page.locator('input[type="file"][multiple]').setInputFiles({ name: file.name, mimeType: "image/jpeg", buffer: file.buffer });
+	if (opts.category) await page.getByLabel("Kategorie").selectOption({ label: opts.category });
+	const save = page.getByRole("button", { name: /in den Schrank/ });
+	await expect(save).toBeEnabled({ timeout: opts.timeout ?? 30_000 });
+	await page.screenshot({ path: `${SHOTS}/add-${file.name}.png` });
 	await save.click();
-	await expect(page).toHaveURL(/\/teil\/[0-9a-f-]{36}$/);
+	await expect(page).toHaveURL(/\/$/);
+	return newestItem(page);
+}
+
+/** Without AI the name is set on the edit page. */
+async function addItem(page: Page, name: string, color: string, category = "Oberteil") {
+	const item = await addPhoto(page, { name: "teil.jpg", buffer: await garment(color) }, { category });
+	await page.goto(`/teil/${item.id}/bearbeiten`);
+	await page.getByPlaceholder("z.B. Creme Teddy-Jacke").fill(name);
+	await page.getByRole("button", { name: "Speichern" }).first().click();
+	await expect(page).toHaveURL(new RegExp(`/teil/${item.id}$`));
 	await expect(page.getByText(name).first()).toBeVisible();
 }
 
@@ -82,14 +105,26 @@ test("ai: connect mock provider, auto-tag, chat, try-on, shopping, packing", asy
 	await expect(page.getByText("3 Modelle gefunden", { exact: false })).toBeVisible();
 	await page.screenshot({ path: `${SHOTS}/${info.project.name}-settings.png`, fullPage: true });
 
-	// Auto-tagging fills the form from the vision model.
-	await page.goto("/neu");
-	const bg = page.getByRole("switch", { name: "Hintergrund entfernen" });
-	if ((await bg.getAttribute("aria-checked")) === "true") await bg.click();
-	await page.locator('input[type="file"][multiple]').setInputFiles({ name: "jacke.jpg", mimeType: "image/jpeg", buffer: await garment("#c0392b") });
-	await expect(page.getByPlaceholder("z.B. Creme Teddy-Jacke")).toHaveValue("Rote Strickjacke");
-	await page.getByRole("button", { name: "Speichern" }).click();
-	await expect(page).toHaveURL(/\/teil\//);
+	// Recognition runs on the server (workflow); the app shows progress and turns the photo upright.
+	const added = await addPhoto(page, { name: "jacke.jpg", buffer: await garment("#c0392b") });
+	await expect(page.getByText(/KI sortiert|Rote Strickjacke/).first()).toBeVisible();
+	await expect
+		.poll(async () => {
+			const items = (await (await page.request.get("/api/items")).json()) as ApiItem[];
+			const it = items.find((i) => i.id === added.id)!;
+			return `${it.aiState}|${it.name}|${it.rotate}|${it.imageFront !== added.imageFront}`;
+		}, { timeout: 60_000 })
+		.toBe("done|Rote Strickjacke|0|true");
+	await page.goto(`/teil/${added.id}`);
+	await expect(page.getByText("Rote Strickjacke").first()).toBeVisible();
+	const dims = await page.evaluate(async (src) => {
+		const img = new Image();
+		img.src = src;
+		await img.decode();
+		return { w: img.naturalWidth, h: img.naturalHeight };
+	}, `/api/img/${(await newestItem(page)).imageFront}`);
+	// The 600×800 test photo was reported "collar left" → turned 90°, so it is now wider than tall.
+	expect(dims.w).toBeGreaterThan(dims.h);
 
 	await page.goto("/outfits");
 	await expect(page.getByText("KI-Kombi").first()).toBeVisible();
@@ -134,18 +169,8 @@ test("ai: connect mock provider, auto-tag, chat, try-on, shopping, packing", asy
 test("background removal runs on-device and yields a transparent cut-out", async ({ page }, info) => {
 	test.setTimeout(300_000);
 	await login(page);
-	await page.goto("/neu");
-	const bg = page.getByRole("switch", { name: "Hintergrund entfernen" });
-	if ((await bg.getAttribute("aria-checked")) !== "true") await bg.click();
-	await page.locator('input[type="file"][multiple]').setInputFiles({ name: "freisteller.jpg", mimeType: "image/jpeg", buffer: await garment("#2e8b57") });
-	const nameInput = page.getByPlaceholder("z.B. Creme Teddy-Jacke");
-	await expect(nameInput).toBeVisible({ timeout: 240_000 });
-	await nameInput.fill(`Freigestellt ${info.project.name}`);
-	await page.getByRole("button", { name: "Speichern" }).click();
-	await expect(page).toHaveURL(/\/teil\/([0-9a-f-]{36})$/);
-	const id = page.url().split("/").pop()!;
-	const items = (await (await page.request.get("/api/items")).json()) as { id: string; imageFront: string }[];
-	const key = items.find((i) => i.id === id)!.imageFront;
+	const item = await addPhoto(page, { name: "freisteller.jpg", buffer: await garment("#2e8b57") }, { removeBg: true, category: "Oberteil", timeout: 240_000 });
+	const key = item.imageFront;
 	const corner = await page.evaluate(async (src) => {
 		const img = new Image();
 		img.src = src;

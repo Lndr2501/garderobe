@@ -1,19 +1,17 @@
-import { ArrowLeft, Camera, CheckCircle2, ImagePlus, Loader2, RotateCcw, TriangleAlert, Wand2 } from "lucide-react";
+import { ArrowLeft, Camera, ImagePlus, RotateCw, Settings2, Sparkles, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
-import type { ItemInput } from "../../shared/types.ts";
-import { api, uploadImage } from "../api.ts";
-import { AiWait } from "../components/AiWait.tsx";
+import { CATEGORIES, type CategoryKey } from "../../shared/taxonomy.ts";
+import type { ItemPayload } from "../../shared/types.ts";
+import { uploadImage } from "../api.ts";
 import { Switch } from "../components/Inputs.tsx";
-import { ItemForm } from "../components/ItemForm.tsx";
 import { PageHead } from "../components/Layout.tsx";
 import { errorText, useToast } from "../components/Toast.tsx";
-import { currentSeason } from "../../shared/taxonomy.ts";
-import { isImageFile, nearestColorKey, processImage, type ProcessedImage, type Stage } from "../lib/image.ts";
+import { aiJpeg, isImageFile, loadCanvas, nearestColorKey, processImage, rotateCanvas, rotateImage, type ProcessedImage, type Stage } from "../lib/image.ts";
 import { useLocal } from "../lib/useLocal.ts";
 import { useSaveItem, useSettings } from "../queries.ts";
 
-type Status = "wait" | "processing" | "uploading" | "ready" | "saving" | "saved" | "error";
+type Status = "wait" | "processing" | "ready" | "saving" | "saved" | "error";
 
 interface Entry {
 	id: string;
@@ -22,35 +20,26 @@ interface Entry {
 	stage?: Stage;
 	pct: number;
 	processed?: ProcessedImage;
-	keys?: { full: string; thumb: string };
-	draft: ItemInput;
-	aiNote?: string;
-	/** Timestamp while the AI tagging request is running. */
-	aiSince?: number;
+	/** Clockwise turn the user asked for (applied when saving). */
+	rotate: number;
+	category: CategoryKey | "";
 	error?: string;
-	savedId?: string;
 }
 
 const STAGE_LABEL: Record<Stage, string> = {
-	laden: "Bild wird geladen …",
-	modell: "Freistell-Modell wird geladen (einmalig) …",
-	freistellen: "Hintergrund wird entfernt …",
+	laden: "Lädt …",
+	modell: "Freistell-Modell lädt (einmalig) …",
+	freistellen: "Hintergrund weg …",
 	fertig: "Fertig",
-};
-
-const STATUS_LABEL: Partial<Record<Status, string>> = {
-	wait: "Wartet …",
-	uploading: "Wird hochgeladen …",
-	saving: "Wird gespeichert …",
-	saved: "Gespeichert",
 };
 
 export function AddItems() {
 	const { data: settings } = useSettings();
 	const [entries, setEntries] = useState<Entry[]>([]);
 	const [removeBg, setRemoveBg] = useState<boolean | null>(null);
-	const [batch, setBatch] = useState(false);
 	const [drag, setDrag] = useState(false);
+	const [saving, setSaving] = useState(false);
+	const [showOptions, setShowOptions] = useState(false);
 	const busy = useRef(false);
 	const cameraInput = useRef<HTMLInputElement>(null);
 	const libraryInput = useRef<HTMLInputElement>(null);
@@ -65,27 +54,11 @@ export function AddItems() {
 		setEntries((list) => list.map((e) => (e.id === id ? { ...e, ...patch } : e)));
 	}, []);
 
-	const addFiles = useCallback(
-		(files: File[] | FileList | null | undefined) => {
-			const list = [...(files ?? [])].filter(isImageFile);
-			if (!list.length) return;
-			setEntries((cur) => {
-				const next = [
-					...cur,
-					...list.map<Entry>((file) => ({
-						id: crypto.randomUUID(),
-						file,
-						status: "wait",
-						pct: 0,
-						draft: { category: undefined, warmth: 3, formality: 2, seasons: [], colors: [], styleTags: [] },
-					})),
-				];
-				if (next.length > 1) setBatch(true);
-				return next;
-			});
-		},
-		[],
-	);
+	const addFiles = useCallback((files: File[] | FileList | null | undefined) => {
+		const list = [...(files ?? [])].filter(isImageFile);
+		if (!list.length) return;
+		setEntries((cur) => [...cur, ...list.map<Entry>((file) => ({ id: crypto.randomUUID(), file, status: "wait", pct: 0, rotate: 0, category: "" }))]);
+	}, []);
 
 	// Paste support (e.g. "Motiv kopieren" on iPhone/Mac).
 	useEffect(() => {
@@ -100,124 +73,78 @@ export function AddItems() {
 		return () => window.removeEventListener("paste", onPaste);
 	}, [addFiles]);
 
-	const run = useCallback(
-		async (entry: Entry) => {
-			try {
-				update(entry.id, { status: "processing", stage: "laden", pct: 0 });
-				const processed = await processImage(entry.file, {
-					removeBg: bg,
-					quality: settings?.bgRemoval.quality ?? "best",
-					enhance,
-					onProgress: (stage, pct) => update(entry.id, { stage, pct }),
-				});
-				update(entry.id, { processed, status: "uploading" });
-				const [full, thumb] = await Promise.all([uploadImage(processed.full), uploadImage(processed.thumb)]);
-				const colorKey = nearestColorKey(processed.colorHex);
-				const draft: ItemInput = {
-					...entry.draft,
-					colorHex: processed.colorHex,
-					colors: colorKey ? [colorKey] : [],
-					seasons: [currentSeason()],
-					imageFront: full,
-					thumbFront: thumb,
-				};
-				update(entry.id, { keys: { full, thumb }, draft, status: "ready" });
-				return { ...entry, keys: { full, thumb }, draft, processed };
-			} catch (e) {
-				update(entry.id, { status: "error", error: errorText(e) });
-				return null;
-			}
-		},
-		[bg, enhance, settings, update],
-	);
-
-	// AI tagging runs in the background: the form is usable right away and the result only
-	// fills fields the user has not touched yet (also after saving, via PATCH).
-	const touched = useRef(new Map<string, Set<string>>());
-	const savedIds = useRef(new Map<string, string>());
-
-	const markTouched = (id: string, before: ItemInput, after: ItemInput) => {
-		const set = touched.current.get(id) ?? new Set<string>();
-		for (const k of Object.keys(after) as (keyof ItemInput)[]) {
-			if (JSON.stringify(before[k]) !== JSON.stringify(after[k])) set.add(k);
-		}
-		touched.current.set(id, set);
-	};
-
-	const startTagging = useCallback(
-		(id: string, processed: ProcessedImage) => {
-			if (!aiOn) return;
-			update(id, { aiSince: Date.now(), aiNote: undefined });
-			const colorKey = nearestColorKey(processed.colorHex);
-			api<ItemInput>("/api/ai/tag", { method: "POST", body: { image: processed.ai, colorHint: colorKey ?? undefined } })
-				.then(async (tags) => {
-					const skip = touched.current.get(id) ?? new Set<string>();
-					// Only take what the model actually filled in – empty fields keep the pixel-based guess.
-					const patch = Object.fromEntries(
-						Object.entries(tags).filter(([k, v]) => !skip.has(k) && v != null && v !== "" && !(Array.isArray(v) && !v.length)),
-					) as ItemInput;
-					setEntries((list) => list.map((e) => (e.id === id ? { ...e, aiSince: undefined, draft: { ...e.draft, ...patch } } : e)));
-					const savedId = savedIds.current.get(id);
-					if (savedId && Object.keys(patch).length) await save.mutateAsync({ id: savedId, data: patch });
-				})
-				.catch((e: unknown) => update(id, { aiSince: undefined, aiNote: `KI-Erkennung fehlgeschlagen: ${errorText(e)}` }));
-		},
-		[aiOn, update, save],
-	);
-
-	// Sequential processing queue.
+	// Background removal runs one photo at a time (it is heavy on phones).
 	useEffect(() => {
 		if (busy.current || !settings) return;
-		const pendingSave = batch ? entries.find((e) => e.status === "ready") : undefined;
-		const next = pendingSave ?? entries.find((e) => e.status === "wait");
+		const next = entries.find((e) => e.status === "wait");
 		if (!next) return;
 		busy.current = true;
 		void (async () => {
-			const done = pendingSave ?? (await run(next));
-			if (done && !pendingSave && done.processed) startTagging(next.id, done.processed);
-			if (done && batch) {
-				update(next.id, { status: "saving" });
-				try {
-					const item = await save.mutateAsync({
-						data: { ...done.draft, category: done.draft.category ?? "other", needsReview: true },
-					});
-					savedIds.current.set(next.id, item.id);
-					update(next.id, { status: "saved", savedId: item.id });
-				} catch (e) {
-					update(next.id, { status: "error", error: errorText(e) });
-				}
+			try {
+				update(next.id, { status: "processing", stage: "laden", pct: 0 });
+				const processed = await processImage(next.file, {
+					removeBg: bg,
+					quality: settings.bgRemoval.quality ?? "best",
+					enhance,
+					onProgress: (stage, pct) => update(next.id, { stage, pct }),
+				});
+				update(next.id, { processed, status: "ready" });
+			} catch (e) {
+				update(next.id, { status: "error", error: errorText(e) });
+			} finally {
+				busy.current = false;
+				setEntries((x) => [...x]);
 			}
-			busy.current = false;
-			setEntries((x) => [...x]);
 		})();
-	}, [entries, run, batch, save, update, settings, startTagging]);
+	}, [entries, bg, enhance, settings, update]);
 
-	const single = !batch && entries.length === 1 ? entries[0] : undefined;
+	const ready = entries.filter((e) => e.status === "ready");
+	const working = entries.some((e) => e.status === "wait" || e.status === "processing");
 
-	const saveSingle = () => {
-		if (!single) return;
-		if (!single.draft.category) return toast("Bitte eine Kategorie wählen", "error");
-		update(single.id, { status: "saving" });
-		save.mutate(
-			{ data: { ...single.draft, needsReview: false } },
-			{
-				onSuccess: (item) => {
-					savedIds.current.set(single.id, item.id);
-					toast(single.aiSince ? "Hängt im Schrank – die KI ergänzt gleich noch Details ✨" : "Hängt jetzt in deinem Schrank ✨", "ok");
-					navigate(`/teil/${item.id}`, { replace: true });
-				},
-				onError: (e) => {
-					update(single.id, { status: "ready" });
-					toast(errorText(e), "error");
-				},
-			},
-		);
+	const saveAll = async () => {
+		if (!ready.length || saving) return;
+		setSaving(true);
+		let ok = 0;
+		for (const e of ready) {
+			const p = e.processed!;
+			update(e.id, { status: "saving" });
+			try {
+				let { full, thumb } = p;
+				let aiBlob = p.aiBlob;
+				if (e.rotate) {
+					({ full, thumb } = await rotateImage(full, e.rotate));
+					aiBlob = await aiJpeg(rotateCanvas(await loadCanvas(p.aiBlob, 1024), e.rotate));
+				}
+				const [imageFront, thumbFront, aiImage] = await Promise.all([uploadImage(full), uploadImage(thumb), aiOn ? uploadImage(aiBlob) : Promise.resolve(undefined)]);
+				const colorKey = nearestColorKey(p.colorHex);
+				const lock = [...(e.category ? ["category"] : []), ...(e.rotate ? ["rotate"] : [])];
+				const data: ItemPayload = {
+					imageFront,
+					thumbFront,
+					colorHex: p.colorHex,
+					colors: colorKey ? [colorKey] : [],
+					category: e.category || "other",
+					needsReview: !aiOn,
+					lock,
+					aiImage,
+					colorHint: colorKey ?? undefined,
+				};
+				await save.mutateAsync({ data });
+				update(e.id, { status: "saved" });
+				ok++;
+			} catch (err) {
+				update(e.id, { status: "error", error: errorText(err) });
+			}
+		}
+		setSaving(false);
+		if (ok) {
+			toast(aiOn ? `${ok} ${ok === 1 ? "Teil hängt" : "Teile hängen"} im Schrank – die KI sortiert gerade ein ✨` : `${ok} ${ok === 1 ? "Teil" : "Teile"} gespeichert`, "ok");
+			navigate("/");
+		}
 	};
 
-	const allDone = entries.length > 0 && entries.every((e) => e.status === "saved" || e.status === "error");
-
 	return (
-		<div className="container page">
+		<div className="container page add-page">
 			<PageHead
 				title="Neue Teile"
 				left={
@@ -226,193 +153,178 @@ export function AddItems() {
 					</Link>
 				}
 				right={
-					single?.status === "ready" ? (
-						<button className="btn primary" onClick={saveSingle} disabled={save.isPending}>
-							Speichern
-						</button>
-					) : undefined
+					<button className={`icon-btn ${showOptions ? "active" : ""}`} onClick={() => setShowOptions((v) => !v)} aria-label="Optionen" title="Optionen">
+						<Settings2 size={18} />
+					</button>
 				}
 			/>
 
-			{entries.length === 0 && (
-				<>
-					<div
-						className={`drop-zone ${drag ? "drag" : ""}`}
-						onDragOver={(e) => {
-							e.preventDefault();
-							setDrag(true);
-						}}
-						onDragLeave={() => setDrag(false)}
-						onDrop={(e) => {
-							e.preventDefault();
-							setDrag(false);
-							addFiles(e.dataTransfer.files);
-						}}
-					>
-						<div className="hand" style={{ fontSize: "1.8rem" }}>
-							Fotografiere ein Kleidungsstück
-						</div>
-						<p className="small muted" style={{ marginTop: 4 }}>
-							Am besten flach hingelegt oder auf einem Bügel vor einer hellen Wand. Mehrere Fotos auf einmal gehen auch – die werden dann automatisch einsortiert.
-						</p>
-						<div className="row wrap" style={{ justifyContent: "center", marginTop: 12 }}>
-							<button className="btn primary" onClick={() => cameraInput.current?.click()}>
-								<Camera size={18} /> Foto aufnehmen
-							</button>
-							<button className="btn" onClick={() => libraryInput.current?.click()}>
-								<ImagePlus size={18} /> Aus Fotos wählen
-							</button>
-						</div>
-						<p className="tiny muted" style={{ marginTop: 12 }}>
-							Tipp: Bilder hier hineinziehen oder einfügen (⌘V) – auch „Motiv kopieren“ aus der Fotos-App.
-						</p>
-					</div>
-					<div className="card row between">
+			{showOptions && (
+				<div className="card stack" style={{ gap: 12 }}>
+					<div className="row between">
 						<div>
-							<b>Hintergrund automatisch entfernen</b>
-							<div className="small muted">Läuft direkt auf deinem Gerät, keine Daten gehen raus.</div>
+							<b className="small">Hintergrund entfernen</b>
+							<div className="tiny muted">Läuft auf deinem Gerät.</div>
 						</div>
 						<Switch label="Hintergrund entfernen" on={bg} onChange={setRemoveBg} />
 					</div>
-					<div className="card row between">
+					<div className="row between">
 						<div>
-							<b>Foto automatisch verbessern</b>
-							<div className="small muted">Hellt dunkle Fotos auf, mehr Kontrast, schärfer.</div>
+							<b className="small">Foto verbessern</b>
+							<div className="tiny muted">Heller, mehr Kontrast, Struktur sichtbar.</div>
 						</div>
 						<Switch label="Foto verbessern" on={enhance} onChange={setEnhance} />
 					</div>
+				</div>
+			)}
+
+			{entries.length === 0 && (
+				<div
+					className={`drop-zone ${drag ? "drag" : ""}`}
+					onDragOver={(e) => {
+						e.preventDefault();
+						setDrag(true);
+					}}
+					onDragLeave={() => setDrag(false)}
+					onDrop={(e) => {
+						e.preventDefault();
+						setDrag(false);
+						addFiles(e.dataTransfer.files);
+					}}
+				>
+					<div className="hand" style={{ fontSize: "1.9rem" }}>
+						Fotografiere deine Teile
+					</div>
+					<p className="small muted" style={{ margin: "4px 0 0" }}>
+						Flach hinlegen, ganzes Teil im Bild, ruhiger Untergrund. Egal wie herum – {aiOn ? "die KI dreht es richtig und sortiert es ein" : "du kannst es danach drehen"}.
+					</p>
+					<div className="stack" style={{ marginTop: 16, gap: 10, alignItems: "stretch" }}>
+						<button className="btn primary" onClick={() => cameraInput.current?.click()}>
+							<Camera size={18} /> Foto aufnehmen
+						</button>
+						<button className="btn" onClick={() => libraryInput.current?.click()}>
+							<ImagePlus size={18} /> Mehrere aus Fotos wählen
+						</button>
+					</div>
 					{!aiOn && (
-						<div className="card small">
-							<Wand2 size={16} style={{ verticalAlign: "-3px" }} /> Mit einer KI (OpenAI-kompatibel) werden Name, Kategorie, Farben und Material automatisch erkannt.{" "}
-							<Link href="/einstellungen">KI einrichten</Link>
-						</div>
+						<p className="tiny muted" style={{ marginTop: 14 }}>
+							<Sparkles size={13} style={{ verticalAlign: "-2px" }} /> Mit einer KI werden Name, Kategorie, Farben und Material automatisch erkannt. <Link href="/einstellungen">KI einrichten</Link>
+						</p>
 					)}
-				</>
+				</div>
 			)}
 
 			<input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden onChange={(e) => (addFiles(e.target.files), (e.target.value = ""))} />
 			<input ref={libraryInput} type="file" accept="image/*" multiple hidden onChange={(e) => (addFiles(e.target.files), (e.target.value = ""))} />
 
-			{single && (
-				<div className="two-col">
-					<div className="card stack">
-						<div className="checker" style={{ aspectRatio: "4 / 5", borderRadius: 16, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-							{single.processed ? (
-								<img src={single.processed.preview} alt="Vorschau" style={{ maxWidth: "92%", maxHeight: "92%", objectFit: "contain" }} />
-							) : (
-								<Progress entry={single} />
-							)}
-						</div>
-						{single.processed && <StatusLine entry={single} />}
-						{single.status === "error" && (
-							<button className="btn" onClick={() => update(single.id, { status: "wait", error: undefined })}>
-								<RotateCcw size={16} /> Nochmal versuchen
+			{entries.length > 0 && (
+				<>
+					<div className="row between">
+						<span className="small muted">
+							{working ? `${entries.filter((e) => e.status !== "wait" && e.status !== "processing").length} von ${entries.length} freigestellt …` : `${ready.length} ${ready.length === 1 ? "Teil" : "Teile"} bereit`}
+							{aiOn ? " · Kategorie & Name macht die KI" : ""}
+						</span>
+						<div className="row" style={{ gap: 6 }}>
+							<button className="icon-btn" onClick={() => cameraInput.current?.click()} aria-label="Weiteres Foto aufnehmen" disabled={saving}>
+								<Camera size={17} />
 							</button>
-						)}
-						{single.aiNote && <div className="badge warn" style={{ whiteSpace: "normal" }}>{single.aiNote}</div>}
-					</div>
-					<div className="card">
-						{single.status === "ready" || single.status === "saving" ? (
-							<div className="stack" style={{ gap: 10 }}>
-								{single.aiSince && <AiWait since={single.aiSince} label="KI erkennt das Teil" />}
-								<ItemForm
-									value={single.draft}
-									onChange={(draft) => {
-										markTouched(single.id, single.draft, draft);
-										update(single.id, { draft });
-									}}
-									currency={settings?.currency}
-								/>
-							</div>
-						) : (
-							<div className="stack muted small">
-								<b style={{ color: "var(--text)" }}>Gleich geht's weiter …</b>
-								<span>Sobald das Bild fertig ist, kannst du hier Name, Kategorie und Farben prüfen{aiOn ? " – die KI füllt alles vor" : ""}.</span>
-							</div>
-						)}
-					</div>
-				</div>
-			)}
-
-			{single?.status === "ready" && (
-				<button className="btn primary block" onClick={saveSingle} disabled={save.isPending}>
-					In den Schrank hängen
-				</button>
-			)}
-
-			{batch && (
-				<div className="stack">
-					<div className="card row between">
-						<div>
-							<b>
-								{entries.filter((e) => e.status === "saved").length} / {entries.length} einsortiert
-							</b>
-							<div className="small muted">Neue Teile sind mit „prüfen“ markiert – tippe sie später kurz an und korrigiere, falls nötig.</div>
+							<button className="icon-btn" onClick={() => libraryInput.current?.click()} aria-label="Weitere Fotos wählen" disabled={saving}>
+								<ImagePlus size={17} />
+							</button>
 						</div>
-						<button className="btn small" onClick={() => libraryInput.current?.click()}>
-							<ImagePlus size={15} /> Mehr
-						</button>
 					</div>
-					<div className="progress">
-						<i style={{ width: `${(entries.filter((e) => e.status === "saved" || e.status === "error").length / entries.length) * 100}%` }} />
-					</div>
-					<div className="grid grid-items">
+					<div className="add-grid">
 						{entries.map((e) => (
-							<div key={e.id} className="tile" onClick={() => e.savedId && navigate(`/teil/${e.savedId}`)} style={{ cursor: e.savedId ? "pointer" : "default" }}>
-								<div className="img checker">
-									{e.processed ? <img src={e.processed.preview} alt="" /> : <Loader2 className="spin" size={22} />}
-								</div>
-								<div className="t-name">{e.draft.name || e.file.name}</div>
-								<StatusLine entry={e} />
-							</div>
+							<AddCard
+								key={e.id}
+								entry={e}
+								aiOn={aiOn}
+								disabled={saving}
+								onRotate={() => update(e.id, { rotate: (e.rotate + 90) % 360 })}
+								onRemove={() => setEntries((list) => list.filter((x) => x.id !== e.id))}
+								onRetry={() => update(e.id, { status: "wait", error: undefined })}
+								onCategory={(category) => update(e.id, { category })}
+							/>
 						))}
 					</div>
-					{allDone && (
-						<Link href="/?pruefen=1" className="btn primary block">
-							Fertig – zum Schrank
-						</Link>
-					)}
-				</div>
+					<div className="add-bar">
+						<button className="btn primary block" onClick={() => void saveAll()} disabled={!ready.length || saving || working}>
+							{saving ? <span className="spinner" /> : null}
+							{working ? "Wird freigestellt …" : saving ? "Wird gespeichert …" : `${ready.length} ${ready.length === 1 ? "Teil" : "Teile"} in den Schrank`}
+						</button>
+					</div>
+				</>
 			)}
 		</div>
 	);
 }
 
-function Progress({ entry }: { entry: Entry }) {
-	if (entry.status === "error") {
-		return (
-			<div className="stack" style={{ alignItems: "center", padding: 20, textAlign: "center" }}>
-				<TriangleAlert color="var(--danger)" />
-				<span className="small">{entry.error}</span>
-			</div>
-		);
-	}
-	const label = entry.status === "processing" && entry.stage ? STAGE_LABEL[entry.stage] : (STATUS_LABEL[entry.status] ?? "");
+function AddCard({
+	entry: e,
+	aiOn,
+	disabled,
+	onRotate,
+	onRemove,
+	onRetry,
+	onCategory,
+}: {
+	entry: Entry;
+	aiOn: boolean;
+	disabled: boolean;
+	onRotate: () => void;
+	onRemove: () => void;
+	onRetry: () => void;
+	onCategory: (c: CategoryKey | "") => void;
+}) {
+	const done = e.status === "ready" || e.status === "saving" || e.status === "saved";
 	return (
-		<div className="stack" style={{ alignItems: "center", width: "70%" }}>
-			<div className="spinner" />
-			<span className="small muted" style={{ textAlign: "center" }}>
-				{label}
-			</span>
-			{entry.status === "processing" && entry.pct > 0 && entry.pct < 1 && (
-				<div className="progress" style={{ width: "100%" }}>
-					<i style={{ width: `${Math.round(entry.pct * 100)}%` }} />
-				</div>
-			)}
+		<div className={`add-card ${e.status}`}>
+			<div className="add-preview checker">
+				{done && e.processed ? (
+					<img src={e.processed.preview} alt="" style={{ transform: e.rotate ? `rotate(${e.rotate}deg)` : undefined }} />
+				) : e.status === "error" ? (
+					<div className="stack" style={{ alignItems: "center", padding: 10, textAlign: "center", gap: 6 }}>
+						<TriangleAlert size={20} color="var(--danger)" />
+						<span className="tiny">{e.error}</span>
+						<button className="btn small" onClick={onRetry}>
+							Nochmal
+						</button>
+					</div>
+				) : (
+					<div className="stack" style={{ alignItems: "center", gap: 8, width: "80%" }}>
+						<span className="spinner" />
+						<span className="tiny muted" style={{ textAlign: "center" }}>
+							{e.status === "processing" && e.stage ? STAGE_LABEL[e.stage] : "Wartet …"}
+						</span>
+						{e.status === "processing" && e.pct > 0 && e.pct < 1 && (
+							<div className="progress" style={{ width: "100%" }}>
+								<i style={{ width: `${Math.round(e.pct * 100)}%` }} />
+							</div>
+						)}
+					</div>
+				)}
+				{e.status === "saving" && (
+					<div className="add-overlay">
+						<span className="spinner" />
+					</div>
+				)}
+				<button className="add-x" onClick={onRemove} aria-label="Entfernen" disabled={disabled}>
+					<X size={15} />
+				</button>
+				{done && (
+					<button className="add-rotate" onClick={onRotate} aria-label="Drehen" disabled={disabled}>
+						<RotateCw size={16} />
+					</button>
+				)}
+			</div>
+			<select className="add-cat" value={e.category} onChange={(ev) => onCategory(ev.target.value as CategoryKey | "")} disabled={disabled} aria-label="Kategorie">
+				<option value="">{aiOn ? "Kategorie: KI erkennt" : "Kategorie wählen"}</option>
+				{CATEGORIES.map((c) => (
+					<option key={c.key} value={c.key}>
+						{c.singular}
+					</option>
+				))}
+			</select>
 		</div>
 	);
-}
-
-function StatusLine({ entry }: { entry: Entry }) {
-	if (entry.status === "saved")
-		return (
-			<span className="badge ok">
-				<CheckCircle2 size={12} /> {entry.aiSince ? "gespeichert · KI …" : "gespeichert"}
-			</span>
-		);
-	if (entry.status === "error") return <span className="badge danger" title={entry.error}>Fehler</span>;
-	if (entry.status === "ready")
-		return <span className="badge">{entry.processed?.bgRemoved ? "freigestellt ✓" : "bereit"}</span>;
-	const label = entry.status === "processing" && entry.stage ? STAGE_LABEL[entry.stage] : (STATUS_LABEL[entry.status] ?? "");
-	return <span className="tiny muted">{label}</span>;
 }

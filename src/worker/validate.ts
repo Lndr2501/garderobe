@@ -101,6 +101,7 @@ export function sanitizeItem(raw: unknown): ItemInput {
 	if (raw.status === "active" || raw.status === "archived") out.status = raw.status;
 	const nr = bool(raw.needsReview);
 	if (nr !== undefined) out.needsReview = nr;
+	if (raw.rotate === 0 || raw.rotate === 90 || raw.rotate === 180 || raw.rotate === 270) out.rotate = raw.rotate;
 	return out;
 }
 

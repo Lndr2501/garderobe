@@ -1,6 +1,7 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import app from "../src/worker/index.ts";
+import { applyTags } from "../src/worker/tagging.ts";
 import type { AppSettings, Item, ShoppingCheckResult, Stats, Trip, WearDay } from "../src/shared/types.ts";
 
 const BASE = "https://garderobe.test";
@@ -313,6 +314,47 @@ describe("AI (OpenAI-compatible)", () => {
 		expect(seen!.getAll("image[]").length + seen!.getAll("image").length).toBeGreaterThanOrEqual(2);
 		const list = await c.json<{ id: string }[]>("/api/tryons");
 		expect(list.map((x) => x.id)).toContain(t.id);
+	});
+});
+
+describe("server-side recognition", () => {
+	async function upload(c: Client): Promise<string> {
+		const form = new FormData();
+		form.append("file", new File([PNG_1PX], "ai.png", { type: "image/png" }));
+		return (await c.json<{ key: string }>("/api/images", { body: form })).key;
+	}
+
+	it("without AI the helper image is dropped and nothing waits", async () => {
+		const c = await loggedIn();
+		const aiImage = await upload(c);
+		const item = await c.json<Item>("/api/items", { body: { category: "top", aiImage, lock: ["category", "bogus"] } });
+		expect(item.aiState).toBe("");
+		expect(item.userFields).toEqual(["category"]);
+		expect((await c.req(`/api/img/${aiImage}`)).status).toBe(404);
+	});
+
+	it("starts the workflow when an AI is configured", async () => {
+		const c = await loggedIn();
+		await withAi(c);
+		const item = await c.json<Item>("/api/items", { body: { aiImage: await upload(c) } });
+		expect(item.aiState).toBe("pending");
+		const again = await c.json<Item>(`/api/items/${item.id}/retag`, { body: { aiImage: await upload(c), unlock: true } });
+		expect(again.aiState).toBe("pending");
+		expect((await c.req(`/api/items/${item.id}/retag`, { body: {} })).status).toBe(400);
+	});
+
+	it("AI results never overwrite fields the user set by hand", async () => {
+		const c = await loggedIn();
+		const item = await c.json<Item>("/api/items", { body: { name: "Mein Lieblingspulli", category: "top", lock: ["name"] } });
+		await c.json<Item>(`/api/items/${item.id}`, { method: "PATCH", body: { material: "Kaschmir", lock: ["material"] } });
+		await applyTags(env.DB, item.id, {
+			tags: { name: "Navy Pullover", category: "top", material: "Wolle", colors: ["navy"], brand: "" },
+			rotate: 90,
+		});
+		const after = await c.json<Item>(`/api/items/${item.id}`);
+		expect(after).toMatchObject({ name: "Mein Lieblingspulli", material: "Kaschmir", colors: ["navy"], aiState: "done", rotate: 90 });
+		expect(after.userFields.sort()).toEqual(["material", "name"]);
+		expect(await applyTags(env.DB, "gibt-es-nicht", { tags: {}, rotate: 0 })).toBe(false);
 	});
 });
 

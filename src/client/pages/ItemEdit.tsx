@@ -1,8 +1,9 @@
 import { ArrowLeft, Camera } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useParams } from "wouter";
-import type { ItemInput } from "../../shared/types.ts";
-import { api, imgUrl, uploadImage } from "../api.ts";
+import type { ItemInput, ItemPayload } from "../../shared/types.ts";
+import { imgUrl, uploadImage } from "../api.ts";
+import { retagItem } from "../lib/recognize.ts";
 import { ItemForm } from "../components/ItemForm.tsx";
 import { PageHead } from "../components/Layout.tsx";
 import { errorText, useToast } from "../components/Toast.tsx";
@@ -25,23 +26,20 @@ export function ItemEdit() {
 
 	useEffect(() => {
 		if (item && !draft) {
-			const { id: _id, createdAt: _c, updatedAt: _u, wearCount: _w, lastWorn: _l, ...rest } = item;
+			const { id: _id, createdAt: _c, updatedAt: _u, wearCount: _w, lastWorn: _l, aiState: _s, aiError: _e, userFields: _f, rotate: _r, ...rest } = item;
 			setDraft(rest);
 		}
 	}, [item, draft]);
 
 	if (!item || !draft) return <div className="container page"><div className="spinner" /></div>;
 
+	// The AI runs on the server; the detail page shows progress and the result.
 	const aiFill = async () => {
-		const key = draft.thumbFront ?? draft.imageFront;
-		if (!key) return toast("Kein Foto vorhanden", "error");
 		setAiBusy(true);
 		try {
-			const blob = await (await fetch(imgUrl(key)!)).blob();
-			const p = await processImage(blob, { removeBg: false, quality: "fast" });
-			const tags = await api<ItemInput>("/api/ai/tag", { method: "POST", body: { image: p.ai } });
-			setDraft((d) => ({ ...d, ...tags, name: tags.name || d?.name }));
-			toast("KI-Vorschläge übernommen – kurz prüfen", "ok");
+			await retagItem(item, true);
+			toast("KI erkennt das Teil neu – dauert einen Moment", "ok");
+			navigate(`/teil/${item.id}`, { replace: true });
 		} catch (e) {
 			toast(errorText(e), "error");
 		} finally {
@@ -63,9 +61,12 @@ export function ItemEdit() {
 		}
 	};
 
-	const submit = () =>
+	const submit = () => {
+		// Only send what changed; those fields are locked against later AI runs.
+		const changed = (Object.keys(draft) as (keyof ItemInput)[]).filter((k) => JSON.stringify(draft[k]) !== JSON.stringify(item[k]));
+		const data: ItemPayload = Object.fromEntries(changed.map((k) => [k, draft[k]]));
 		save.mutate(
-			{ id: item.id, data: { ...draft, needsReview: false } },
+			{ id: item.id, data: { ...data, needsReview: false, lock: changed } },
 			{
 				onSuccess: () => {
 					toast("Gespeichert", "ok");
@@ -74,6 +75,7 @@ export function ItemEdit() {
 				onError: (e) => toast(errorText(e), "error"),
 			},
 		);
+	};
 
 	return (
 		<div className="container page">

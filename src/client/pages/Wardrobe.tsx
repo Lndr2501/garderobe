@@ -9,6 +9,8 @@ import { TopNav } from "../components/Layout.tsx";
 import { Mascot } from "../components/Mascot.tsx";
 import { OutfitCollage } from "../components/OutfitCollage.tsx";
 import { Rack } from "../components/Rack.tsx";
+import { RecognitionStatus } from "../components/RecognitionStatus.tsx";
+import { isRecognizing } from "../lib/recognize.ts";
 import { SkyBanner } from "../components/SkyBanner.tsx";
 import { errorText, useToast } from "../components/Toast.tsx";
 import { WeatherIcon } from "../components/WeatherIcon.tsx";
@@ -144,6 +146,8 @@ export function Wardrobe() {
 	const [review, setReview] = useState(search.includes("pruefen"));
 	const [color, setColor] = useState<string | null>(null);
 	const items = useMemo(() => (allItems ?? []).filter((i) => i.status === "active"), [allItems]);
+	// Pieces the AI is still looking at wait in the status strip instead of "Sonstiges".
+	const shown = useMemo(() => items.filter((i) => !isRecognizing(i)), [items]);
 	const suggest = useSuggestions("", false, localDate());
 	const first = suggest.data?.suggestions[0];
 	const map = useItemMap();
@@ -152,7 +156,7 @@ export function Wardrobe() {
 
 	const filtered = useMemo(() => {
 		const query = q.trim().toLowerCase();
-		return items.filter(
+		return shown.filter(
 			(i) =>
 				(!query || `${i.name} ${i.subcategory} ${i.brand} ${i.material} ${i.colors.join(" ")} ${i.styleTags.join(" ")}`.toLowerCase().includes(query)) &&
 				(!season || i.seasons.length === 0 || i.seasons.includes(nowSeason)) &&
@@ -160,7 +164,7 @@ export function Wardrobe() {
 				(!review || i.needsReview) &&
 				(!color || i.colors.includes(color)),
 		);
-	}, [items, q, season, fav, color, review, nowSeason]);
+	}, [shown, q, season, fav, color, review, nowSeason]);
 
 	const usedColors = COLORS.filter((c) => items.some((i) => i.colors[0] === c.key));
 	const reviewCount = items.filter((i) => i.needsReview).length;
@@ -226,6 +230,8 @@ export function Wardrobe() {
 					</div>
 				</div>
 
+				<RecognitionStatus items={items} />
+
 				{isPending && !allItems && (
 					<div className="row" style={{ justifyContent: "center", padding: 40 }}>
 						<div className="spinner" />
@@ -242,7 +248,7 @@ export function Wardrobe() {
 					</div>
 				)}
 
-				{items.length > 0 && filtered.length === 0 && <div className="empty">Nichts gefunden.</div>}
+				{shown.length > 0 && filtered.length === 0 && <div className="empty">Nichts gefunden.</div>}
 
 				{view === "rack" &&
 					CATEGORIES.map((cat) => {
