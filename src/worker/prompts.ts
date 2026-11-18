@@ -148,10 +148,11 @@ export function tryOnPromptEn(itemNames: string[]): string {
 export function studioPrompt(category: string, kind: string, forCutout = false): string {
 	const what = kind ? ` (${kind})` : "";
 	const lighting = forCutout
-		? "soft even studio lighting, isolated on a flat uniform light grey matte with zero cast or contact shadow, no floor or horizon, generous clearance around all edges"
+		? "soft diffused studio lighting with subtle, realistic shading on the product itself; clean, uniform light grey backdrop with no floor, horizon or cast shadow; keep the entire product in frame with room around it"
 		: "soft diffused studio lighting, subtle soft contact shadow, clean light grey seamless background";
-	const keep =
-		"Keep every detail identical to the reference: exact color, fabric texture, pattern, logo, print, buttons, zipper, seams, wash and fading. Do not add or invent logos, text or decorations.";
+	const keep = forCutout
+		? "Preserve the exact original color, fabric or knit texture, pattern, neckline and cut, seams, buttons and zipper. Keep any existing print, embroidery or small logo exactly as shown, with the same color, size and placement. Do not add, replace or recolor any details. Photorealistic, high-end fashion e-commerce photography."
+		: "Keep every detail identical to the reference: exact color, fabric texture, pattern, logo, print, buttons, zipper, seams, wash and fading. Do not add or invent logos, text or decorations.";
 	if (category === "shoes") {
 		return `Professional e-commerce product photo of the exact same pair of shoes${what} as in the reference image, three-quarter side view of the pair, centered, ${lighting}. ${keep} No person, no feet, no text.`;
 	}
@@ -160,6 +161,12 @@ export function studioPrompt(category: string, kind: string, forCutout = false):
 	}
 	if (category === "bag" || category === "accessory" || category === "other") {
 		return `Professional e-commerce product photo of the exact same item${what} as in the reference image, front view, standing upright with natural volume, centered, ${lighting}. ${keep} No person, no text.`;
+	}
+	if (forCutout) {
+		const volume = category === "bottom"
+			? "natural volume through the waist and hips, with the original drape and the full hem or both legs visible"
+			: "a naturally filled chest, rounded shoulders and gently shaped sleeves where present, while keeping the original fit and drape";
+		return `Professional e-commerce product photo of this exact garment${what} from the reference image. Straight front view, centered, with natural, realistic 3D volume as if worn by an invisible mannequin: ${volume}. The garment should look naturally worn, not laid flat or inflated. No visible mannequin, body, neck insert or hanger. Use ${lighting}. ${keep}`;
 	}
 	const shape = category === "bottom" ? "with both legs fully visible" : "with natural shoulders and sleeves";
 	return `Professional e-commerce product photo of the exact same garment${what} as in the reference image, shown on an invisible ghost mannequin so it has natural three-dimensional volume, ${shape}, front view, centered, ${lighting}. ${keep} No person, no hanger, no visible mannequin parts or neck stump, no text.`;

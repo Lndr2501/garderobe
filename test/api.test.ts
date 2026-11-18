@@ -343,7 +343,7 @@ describe("studio pictures", () => {
 			await c.json<Item>(`/api/items/${item.id}/studio`, { body: { image: input } });
 			await expect.poll(async () => (await c.json<Item>(`/api/items/${item.id}`)).studioState).toBe("running");
 			expect(generator).toHaveBeenCalledExactlyOnceWith(
-				expect.stringMatching(/ghost mannequin.*zero cast or contact shadow.*Keep every detail/),
+				expect.stringMatching(/Straight front view.*realistic 3D volume.*invisible mannequin.*naturally filled chest.*rounded shoulders.*gently shaped sleeves.*no floor, horizon or cast shadow.*exact original color.*knit texture.*embroidery or small logo/),
 				{ data: PNG_1PX.buffer, type: "image/png" },
 				{ width: 768, height: 1024 },
 			);
