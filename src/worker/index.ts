@@ -490,6 +490,7 @@ async function loadSettings(db: D1Database): Promise<AppSettings> {
 			imageModel: ai.imageModel,
 			tryonMode: ai.tryonMode,
 			jsonMode: ai.jsonMode,
+			reasoning: ai.reasoning,
 			hasKey: !!ai.apiKey,
 			keyHint: ai.apiKey ? `…${ai.apiKey.slice(-4)}` : "",
 			configured: aiConfigured(ai),
@@ -537,6 +538,7 @@ app.patch("/api/settings", async (c) => {
 		}
 		if (a.tryonMode === "edits" || a.tryonMode === "chat") ai.tryonMode = a.tryonMode;
 		if (typeof a.jsonMode === "boolean") ai.jsonMode = a.jsonMode;
+		if (typeof a.reasoning === "boolean") ai.reasoning = a.reasoning;
 		if (typeof a.apiKey === "string" && a.apiKey.trim()) ai.apiKey = a.apiKey.trim().slice(0, 500);
 		if (a.clearKey === true) ai.apiKey = "";
 		await setSetting(c.env.DB, "ai", ai);
@@ -550,18 +552,22 @@ app.get("/api/ai/models", async (c) => c.json({ models: await listModels(await l
 
 app.post("/api/ai/test", async (c) => {
 	const ai = await loadAi(c.env.DB);
-	const result: { ok: boolean; models?: string[]; reply?: string; error?: string; modelsError?: string } = { ok: false };
-	try {
-		result.models = (await listModels(ai)).slice(0, 200);
-	} catch (err) {
-		result.modelsError = (err as Error).message;
-	}
-	try {
-		result.reply = (await chatText(ai, [{ role: "user", content: "Antworte nur mit: Bereit!" }], { maxTokens: 400 })).slice(0, 200);
+	const result: { ok: boolean; models?: string[]; reply?: string; error?: string; modelsError?: string; ms?: number } = { ok: false };
+	const [models, reply] = await Promise.allSettled([
+		listModels(ai),
+		(async () => {
+			const t0 = Date.now();
+			const text = await chatText(ai, [{ role: "user", content: "Antworte nur mit: Bereit!" }], { maxTokens: 400 });
+			result.ms = Date.now() - t0;
+			return text;
+		})(),
+	]);
+	if (models.status === "fulfilled") result.models = models.value.slice(0, 200);
+	else result.modelsError = (models.reason as Error).message;
+	if (reply.status === "fulfilled") {
+		result.reply = reply.value.slice(0, 200);
 		result.ok = true;
-	} catch (err) {
-		result.error = (err as Error).message;
-	}
+	} else result.error = (reply.reason as Error).message;
 	return c.json(result);
 });
 

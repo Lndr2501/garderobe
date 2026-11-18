@@ -153,6 +153,7 @@ interface TestResult {
 	reply?: string;
 	error?: string;
 	modelsError?: string;
+	ms?: number;
 }
 
 function AiSection({ settings }: { settings: AppSettings }) {
@@ -166,15 +167,16 @@ function AiSection({ settings }: { settings: AppSettings }) {
 	const [imageModel, setImageModel] = useState(ai.imageModel);
 	const [tryonMode, setTryonMode] = useState(ai.tryonMode);
 	const [jsonMode, setJsonMode] = useState(ai.jsonMode);
+	const [reasoning, setReasoning] = useState(ai.reasoning ?? false);
 	const [models, setModels] = useState<string[]>([]);
 	const [test, setTest] = useState<TestResult | null>(null);
 	const [testing, setTesting] = useState(false);
 
 	const dirty =
-		baseUrl !== ai.baseUrl || !!apiKey || model !== ai.model || visionModel !== ai.visionModel || imageModel !== ai.imageModel || tryonMode !== ai.tryonMode || jsonMode !== ai.jsonMode;
+		baseUrl !== ai.baseUrl || !!apiKey || model !== ai.model || visionModel !== ai.visionModel || imageModel !== ai.imageModel || tryonMode !== ai.tryonMode || jsonMode !== ai.jsonMode || reasoning !== (ai.reasoning ?? false);
 
 	const persist = async () => {
-		const s = await save.mutateAsync({ ai: { baseUrl, model, visionModel, imageModel, tryonMode, jsonMode, ...(apiKey ? { apiKey } : {}) } });
+		const s = await save.mutateAsync({ ai: { baseUrl, model, visionModel, imageModel, tryonMode, jsonMode, reasoning, ...(apiKey ? { apiKey } : {}) } });
 		setApiKey("");
 		setBaseUrl(s.ai.baseUrl);
 		return s;
@@ -290,6 +292,13 @@ function AiSection({ settings }: { settings: AppSettings }) {
 				</span>
 				<Switch label="JSON-Modus" on={jsonMode} onChange={setJsonMode} />
 			</div>
+			<div className="row between">
+				<span className="small">
+					KI darf „nachdenken“
+					<div className="tiny muted">Aus = schnellere Antworten. Nur bei Denk-Modellen (Qwen3, DeepSeek R1 …) relevant.</div>
+				</span>
+				<Switch label="Nachdenken" on={reasoning} onChange={setReasoning} />
+			</div>
 			<div className="row wrap">
 				<button
 					className="btn primary"
@@ -313,7 +322,12 @@ function AiSection({ settings }: { settings: AppSettings }) {
 						{test.ok ? <CheckCircle2 size={18} color="var(--ok)" /> : <XCircle size={18} color="var(--danger)" />}
 						<b>{test.ok ? "Verbindung klappt" : "Verbindung fehlgeschlagen"}</b>
 					</div>
-					{test.reply && <div className="small">Antwort: „{test.reply}“</div>}
+					{test.reply && (
+						<div className="small">
+							Antwort: „{test.reply}“{test.ms !== undefined ? ` nach ${(test.ms / 1000).toFixed(1).replace(".", ",")} s` : ""}
+							{test.ms !== undefined && test.ms > 15000 ? " – ziemlich langsam, die App wartet deshalb nirgends auf die KI." : ""}
+						</div>
+					)}
 					{test.error && <div className="small" style={{ color: "var(--danger)" }}>{test.error}</div>}
 					{test.models && <div className="tiny muted">{test.models.length} Modelle gefunden – sie werden jetzt in den Feldern vorgeschlagen.</div>}
 					{test.modelsError && <div className="tiny muted">Modell-Liste nicht verfügbar: {test.modelsError}</div>}

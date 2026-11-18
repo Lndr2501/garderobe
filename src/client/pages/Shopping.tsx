@@ -5,6 +5,7 @@ import { CATEGORIES, categoryDef, colorDef } from "../../shared/taxonomy.ts";
 import type { Item } from "../../shared/types.ts";
 import { ChipSelect, ColorSelect } from "../components/Inputs.tsx";
 import { ItemImage } from "../components/ItemImage.tsx";
+import { AiWait } from "../components/AiWait.tsx";
 import { PageHead } from "../components/Layout.tsx";
 import { errorText, useToast } from "../components/Toast.tsx";
 import { nearestColorKey, prepareImage } from "../lib/image.ts";
@@ -170,6 +171,7 @@ export function Shopping() {
 				<button className="btn primary block" onClick={run} disabled={check.isPending}>
 					{check.isPending ? <span className="spinner" /> : <Sparkles size={17} />} {check.isPending ? "Vergleiche mit deinem Schrank …" : "Prüfen"}
 				</button>
+				{check.isPending && <AiWait since={check.submittedAt || null} label="KI vergleicht" />}
 			</div>
 
 			{result && v && (

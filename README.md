@@ -14,7 +14,7 @@ OpenAI-kompatible KI-Schnittstelle.
 - **KI** (optional, jede OpenAI-kompatible API): erkennt Name, Kategorie, Farbe und Material, schlägt Outfits vor, Chat-Assistent „Bügel“, Packlisten, Shopping-Check, virtuelle Anprobe (`/images/edits` oder Chat mit Bildausgabe).
 - **Ohne KI** laufen alle Vorschläge regelbasiert (Wetter, Farbharmonie, Tragehistorie).
 - **Outfits**: Tagesvorschläge nach Wetter (Open-Meteo), Baukasten mit Zufall und Sperren, Avatar-Ansicht.
-- **Kalender**: was wann getragen wurde, Serie, Nutzungsquote.
+- **Getragen**: „Anziehen“ im Schrank oder „Heute getragen“ beim Teil; fliesst in Statistik und Vorschläge ein (kein eigener Kalender mehr).
 - **Statistik**: Lieblinge, Ladenhüter, Kosten pro Tragen, Farben und Kategorien.
 - **Reisen**: Packliste aus Ziel, Datum, Wettervorhersage und Aktivitäten, mit Abhaken.
 

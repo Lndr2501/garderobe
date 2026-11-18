@@ -2,6 +2,7 @@ import { Camera, RotateCcw, Send, Square } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { imgUrl, streamChat } from "../api.ts";
+import { AiWait } from "../components/AiWait.tsx";
 import { PageHead } from "../components/Layout.tsx";
 import { Mascot } from "../components/Mascot.tsx";
 import { errorText } from "../components/Toast.tsx";
@@ -53,6 +54,7 @@ export function Assistant() {
 	const [input, setInput] = useState("");
 	const [image, setImage] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
+	const [sentAt, setSentAt] = useState<number | null>(null);
 	const abort = useRef<AbortController | null>(null);
 	const endRef = useRef<HTMLDivElement>(null);
 	const fileRef = useRef<HTMLInputElement>(null);
@@ -71,6 +73,7 @@ export function Assistant() {
 		const img = image;
 		setImage(null);
 		setBusy(true);
+		setSentAt(Date.now());
 		const ctrl = new AbortController();
 		abort.current = ctrl;
 		const now = new Date();
@@ -97,6 +100,7 @@ export function Assistant() {
 			else setMsgs([...history, { role: "assistant", content: `${acc ? `${acc}\n\n` : ""}⚠︎ ${errorText(e)}`, error: true }]);
 		} finally {
 			setBusy(false);
+			setSentAt(null);
 			abort.current = null;
 		}
 	};
@@ -135,7 +139,7 @@ export function Assistant() {
 				{msgs.map((m, i) => (
 					<div key={i} className={`msg ${m.role}`} style={m.error ? { borderColor: "var(--danger)" } : undefined}>
 						{m.image && <img src={m.image} alt="" style={{ maxWidth: 160, borderRadius: 12, display: "block", marginBottom: 6 }} />}
-						{m.role === "assistant" ? m.content ? <RichText text={m.content} /> : <span className="spinner" style={{ display: "inline-block" }} /> : m.content}
+						{m.role === "assistant" ? m.content ? <RichText text={m.content} /> : <AiWait since={sentAt ?? Date.now()} label="Bügel überlegt" /> : m.content}
 					</div>
 				))}
 				<div ref={endRef} />

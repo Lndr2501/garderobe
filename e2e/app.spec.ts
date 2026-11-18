@@ -46,7 +46,7 @@ async function addItem(page: Page, name: string, color: string, category = "Ober
 
 test.describe.configure({ mode: "serial" });
 
-test("core: add item, wear it, see it in wardrobe and calendar", async ({ page }, info) => {
+test("core: add item, wear it, see it in wardrobe and stats", async ({ page }, info) => {
 	await login(page);
 	const name = `Shirt ${info.project.name}`;
 	await addItem(page, name, "#2f6fd6");
@@ -62,10 +62,6 @@ test("core: add item, wear it, see it in wardrobe and calendar", async ({ page }
 	await page.getByLabel("Raster").click();
 	await expect(page.getByText(name).first()).toBeVisible();
 	await page.screenshot({ path: `${SHOTS}/${info.project.name}-wardrobe-grid.png`, fullPage: true });
-
-	await page.goto("/kalender");
-	await expect(page.getByText(name).first()).toBeVisible();
-	await page.screenshot({ path: `${SHOTS}/${info.project.name}-calendar.png`, fullPage: true });
 
 	await page.goto("/outfits");
 	await expect(page.getByText(/nach Wetter|von der KI/).first()).toBeVisible();

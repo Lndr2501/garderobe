@@ -67,7 +67,7 @@ export function StatsPage() {
 						<h2>Lieblinge</h2>
 						<span className="small faint">am häufigsten getragen</span>
 					</div>
-					{stats.mostWorn.length === 0 && <div className="small muted">Trag im Kalender ein, was du anhast – dann siehst du hier deine Lieblinge.</div>}
+					{stats.mostWorn.length === 0 && <div className="small muted">Tipp im Schrank bei „Heute“ auf „Anziehen“ oder bei einem Teil auf „Heute getragen“ – dann siehst du hier deine Lieblinge.</div>}
 					{stats.mostWorn.map((m) => {
 						const it = map.get(m.id);
 						return it ? <ItemRow key={m.id} item={it} right={<span className="badge">{m.count}×</span>} /> : null;

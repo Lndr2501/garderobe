@@ -1,7 +1,8 @@
 import { Bookmark, Check, Dices, Plus, Sparkles, Wand2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import type { Item, OutfitSuggestion } from "../../shared/types.ts";
+import { AiWait } from "../components/AiWait.tsx";
 import { PageHead } from "../components/Layout.tsx";
 import { OutfitCollage } from "../components/OutfitCollage.tsx";
 import { errorText, useToast } from "../components/Toast.tsx";
@@ -19,9 +20,16 @@ export function Outfits() {
 	const map = useItemMap();
 	const [occasion, setOccasion] = useState("Alltag");
 	const [seed, setSeed] = useState(localDate());
+	const [aiSeed, setAiSeed] = useState(localDate());
 	const [useAi, setUseAi] = useState(true);
 	const aiOn = !!settings?.ai.configured;
-	const suggest = useSuggestions(occasion === "Alltag" ? "" : occasion, aiOn && useAi, seed);
+	const occ = occasion === "Alltag" ? "" : occasion;
+	// Rule-based ideas are instant; AI ideas load in parallel and appear when ready.
+	const rules = useSuggestions(occ, false, seed);
+	const ai = useSuggestions(occ, true, aiSeed, aiOn && useAi);
+	const aiSince = useFetchStart(ai.isFetching);
+	const aiList = ai.data?.source === "ai" && !ai.isFetching ? ai.data.suggestions : [];
+	const aiError = !ai.isFetching ? (ai.data?.aiError ?? (ai.error ? errorText(ai.error) : undefined)) : undefined;
 	const toItems = (ids: string[]) => ids.map((id) => map.get(id)).filter((x): x is Item => !!x);
 
 	return (
@@ -56,33 +64,39 @@ export function Outfits() {
 					))}
 				</div>
 				<div className="row wrap">
-					<button className="btn small" onClick={() => setSeed(String(Date.now()))} disabled={suggest.isFetching}>
+					<button className="btn small" onClick={() => setSeed(String(Date.now()))} disabled={rules.isFetching}>
 						<Dices size={15} /> Neu würfeln
 					</button>
 					{aiOn && (
 						<button className={`chip ${useAi ? "on" : ""}`} onClick={() => setUseAi(!useAi)}>
-							<Sparkles size={14} /> KI
+							<Sparkles size={14} /> KI-Ideen
 						</button>
 					)}
-					{suggest.data && (
-						<span className="tiny muted">
-							{suggest.data.source === "ai" ? "von der KI" : "nach Wetter & Tragehistorie"}
-							{suggest.data.aiError ? ` · KI nicht verfügbar: ${suggest.data.aiError}` : ""}
-						</span>
+					{aiOn && useAi && !ai.isFetching && (
+						<button className="btn small soft" onClick={() => setAiSeed(String(Date.now()))}>
+							<Sparkles size={15} /> KI nochmal fragen
+						</button>
 					)}
 				</div>
 				{(items?.length ?? 0) < 2 && <div className="small muted">Füge ein paar Teile hinzu, dann gibt's hier Vorschläge.</div>}
-				{suggest.isFetching && (
-					<div className="row muted small">
-						<div className="spinner" /> Stelle Outfits zusammen …
+				{aiOn && useAi && ai.isFetching && <AiWait since={aiSince} label="KI stellt Outfits zusammen" />}
+				{aiOn && useAi && aiError && <div className="tiny muted">KI gerade nicht verfügbar: {aiError}</div>}
+				{(aiList.length > 0 || rules.data) && (
+					<div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
+						{aiList.map((s, i) => (
+							<SuggestionCard key={`ai-${aiSeed}-${i}`} s={s} items={toItems(s.itemIds)} occasion={occasion} />
+						))}
+						{rules.data?.suggestions.map((s, i) => (
+							<SuggestionCard key={`r-${seed}-${i}`} s={s} items={toItems(s.itemIds)} occasion={occasion} />
+						))}
+						{rules.data?.suggestions.length === 0 && aiList.length === 0 && (
+							<div className="small muted">Keine passende Kombination gefunden – es fehlen vielleicht Oberteile, Hosen oder Schuhe.</div>
+						)}
 					</div>
 				)}
-				{!suggest.isFetching && suggest.data && (
-					<div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
-						{suggest.data.suggestions.map((s, i) => (
-							<SuggestionCard key={`${seed}-${i}`} s={s} items={toItems(s.itemIds)} occasion={occasion} />
-						))}
-						{suggest.data.suggestions.length === 0 && <div className="small muted">Keine passende Kombination gefunden – es fehlen vielleicht Oberteile, Hosen oder Schuhe.</div>}
+				{!rules.data && rules.isFetching && (
+					<div className="row muted small">
+						<div className="spinner" /> Stelle Outfits zusammen …
 					</div>
 				)}
 			</section>
@@ -127,6 +141,9 @@ function SuggestionCard({ s, items, occasion }: { s: OutfitSuggestion; items: It
 			<div className="hand" style={{ fontSize: "1.45rem", lineHeight: 1.1 }}>
 				{s.name}
 			</div>
+			<span className={`badge ${s.source === "ai" ? "" : "soft"}`} style={{ alignSelf: "flex-start" }}>
+				{s.source === "ai" ? "KI-Idee" : "nach Wetter"}
+			</span>
 			{s.reason && <div className="small muted">{s.reason}</div>}
 			<div className="row wrap" style={{ gap: 6 }}>
 				<button
@@ -165,4 +182,11 @@ function SuggestionCard({ s, items, occasion }: { s: OutfitSuggestion; items: It
 			</div>
 		</div>
 	);
+}
+
+/** Remembers when a fetch started (for the AI wait counter). */
+function useFetchStart(fetching: boolean): number | null {
+	const [since, setSince] = useState<number | null>(null);
+	useEffect(() => setSince(fetching ? Date.now() : null), [fetching]);
+	return since;
 }

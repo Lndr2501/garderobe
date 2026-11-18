@@ -189,13 +189,14 @@ export interface SuggestResponse {
 	aiError?: string;
 }
 
-export function useSuggestions(occasion: string, useAi: boolean, seed: string) {
+export function useSuggestions(occasion: string, useAi: boolean, seed: string, enabled = true) {
 	const { data: weather } = useWeather();
 	const { data: items } = useItems();
 	const count = items?.length ?? 0;
 	return useQuery({
 		queryKey: ["suggest", occasion, useAi, seed, weather?.temp, count],
-		enabled: count > 0,
+		enabled: enabled && count > 0,
+		retry: useAi ? 0 : 1,
 		staleTime: 3 * 3600_000,
 		queryFn: () =>
 			api<SuggestResponse>("/api/ai/suggest", {

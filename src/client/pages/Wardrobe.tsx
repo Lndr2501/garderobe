@@ -122,7 +122,7 @@ function TodayCard({ suggestionIds, reason, name }: { suggestionIds: string[]; r
 							<Check size={16} /> Anziehen
 						</button>
 					)}
-					<button className="btn small" onClick={() => navigate(showWorn ? "/kalender" : "/outfits")}>
+					<button className="btn small" onClick={() => navigate("/outfits")}>
 						{showWorn ? "Ändern" : "Mehr Ideen"}
 					</button>
 				</div>
@@ -188,8 +188,6 @@ export function Wardrobe() {
 			</SkyBanner>
 			<TopNav />
 			<div className="container page">
-				{first && <TodayCard suggestionIds={first.itemIds} reason={first.reason} name={first.name} />}
-
 				<div className="stack" style={{ gap: 10 }}>
 					<div className="row">
 						<div style={{ position: "relative", flex: 1 }}>
@@ -251,8 +249,8 @@ export function Wardrobe() {
 						const list = filtered.filter((i) => i.category === cat.key);
 						if (list.length === 0) return null;
 						return (
-							<section key={cat.key} className="card" style={{ paddingInline: 6, overflow: "hidden" }}>
-								<div className="section-title" style={{ paddingInline: 10 }}>
+							<section key={cat.key} className="closet">
+								<div className="section-title">
 									<h2>{cat.label}</h2>
 									<span className="small faint">{list.length}</span>
 								</div>
@@ -260,6 +258,8 @@ export function Wardrobe() {
 							</section>
 						);
 					})}
+
+				{first && <TodayCard suggestionIds={first.itemIds} reason={first.reason} name={first.name} />}
 
 				{view === "grid" &&
 					CATEGORIES.map((cat) => {

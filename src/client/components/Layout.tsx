@@ -1,11 +1,10 @@
-import { BarChart3, CalendarDays, Luggage, MessageCircle, MoreHorizontal, Settings, Shirt, Sparkles, UserRound } from "lucide-react";
+import { BarChart3, Luggage, MessageCircle, MoreHorizontal, Settings, Shirt, Sparkles, UserRound } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 
 const MAIN = [
 	{ href: "/", label: "Schrank", icon: Shirt },
 	{ href: "/outfits", label: "Outfits", icon: Sparkles },
-	{ href: "/kalender", label: "Kalender", icon: CalendarDays },
 	{ href: "/assistent", label: "Assistent", icon: MessageCircle },
 ];
 

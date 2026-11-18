@@ -1,3 +1,4 @@
+import { AiWait } from "../components/AiWait.tsx";
 import { ArrowLeft, Check, Luggage, MapPin, Plus, RefreshCw, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useParams } from "wouter";
@@ -83,6 +84,7 @@ function NewTrip({ onClose }: { onClose: () => void }) {
 	const [end, setEnd] = useState(addDays(localDate(), 10));
 	const [activities, setActivities] = useState<string[]>(["sightseeing"]);
 	const [busy, setBusy] = useState(false);
+	const [since, setSince] = useState<number | null>(null);
 	const save = useSaveTrip();
 	const qc = useQueryClient();
 	const toast = useToast();
@@ -97,6 +99,7 @@ function NewTrip({ onClose }: { onClose: () => void }) {
 	const create = async () => {
 		if (!place && !q.trim()) return toast("Bitte ein Ziel eingeben", "error");
 		setBusy(true);
+		setSince(Date.now());
 		try {
 			const weather = place ? await fetchTripWeather(place.lat, place.lon, start, end).catch(() => null) : null;
 			const trip = await save.mutateAsync({
@@ -117,6 +120,7 @@ function NewTrip({ onClose }: { onClose: () => void }) {
 		} catch (e) {
 			toast(errorText(e), "error");
 			setBusy(false);
+			setSince(null);
 		}
 	};
 
@@ -174,6 +178,7 @@ function NewTrip({ onClose }: { onClose: () => void }) {
 				<button className="btn primary block" onClick={() => void create()} disabled={busy}>
 					{busy ? <span className="spinner" /> : <Sparkles size={17} />} {busy ? "Packliste wird erstellt …" : "Packliste erstellen"}
 				</button>
+				{busy && <AiWait since={since} label="KI packt" />}
 			</div>
 		</Sheet>
 	);

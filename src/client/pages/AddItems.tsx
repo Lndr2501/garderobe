@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import type { ItemInput } from "../../shared/types.ts";
 import { api, uploadImage } from "../api.ts";
+import { AiWait } from "../components/AiWait.tsx";
 import { Switch } from "../components/Inputs.tsx";
 import { ItemForm } from "../components/ItemForm.tsx";
 import { PageHead } from "../components/Layout.tsx";
@@ -12,7 +13,7 @@ import { isImageFile, nearestColorKey, processImage, type ProcessedImage, type S
 import { useLocal } from "../lib/useLocal.ts";
 import { useSaveItem, useSettings } from "../queries.ts";
 
-type Status = "wait" | "processing" | "uploading" | "tagging" | "ready" | "saving" | "saved" | "error";
+type Status = "wait" | "processing" | "uploading" | "ready" | "saving" | "saved" | "error";
 
 interface Entry {
 	id: string;
@@ -24,6 +25,8 @@ interface Entry {
 	keys?: { full: string; thumb: string };
 	draft: ItemInput;
 	aiNote?: string;
+	/** Timestamp while the AI tagging request is running. */
+	aiSince?: number;
 	error?: string;
 	savedId?: string;
 }
@@ -38,7 +41,6 @@ const STAGE_LABEL: Record<Stage, string> = {
 const STATUS_LABEL: Partial<Record<Status, string>> = {
 	wait: "Wartet …",
 	uploading: "Wird hochgeladen …",
-	tagging: "KI erkennt das Teil …",
 	saving: "Wird gespeichert …",
 	saved: "Gespeichert",
 };
@@ -111,35 +113,56 @@ export function AddItems() {
 				update(entry.id, { processed, status: "uploading" });
 				const [full, thumb] = await Promise.all([uploadImage(processed.full), uploadImage(processed.thumb)]);
 				const colorKey = nearestColorKey(processed.colorHex);
-				let draft: ItemInput = {
+				const draft: ItemInput = {
 					...entry.draft,
 					colorHex: processed.colorHex,
 					colors: colorKey ? [colorKey] : [],
-					seasons: [],
+					seasons: [currentSeason()],
 					imageFront: full,
 					thumbFront: thumb,
 				};
-				let aiNote: string | undefined;
-				if (aiOn) {
-					update(entry.id, { status: "tagging" });
-					try {
-						const tags = await api<ItemInput>("/api/ai/tag", { method: "POST", body: { image: processed.ai, colorHint: colorKey ?? undefined } });
-						// Only take what the model actually filled in – empty fields keep the pixel-based guess.
-						const filled = Object.entries(tags).filter(([, v]) => v != null && v !== "" && !(Array.isArray(v) && !v.length));
-						draft = { ...draft, ...Object.fromEntries(filled) };
-					} catch (e) {
-						aiNote = `KI-Erkennung fehlgeschlagen: ${errorText(e)}`;
-					}
-				}
-				if (!draft.seasons?.length) draft.seasons = [currentSeason()];
-				update(entry.id, { keys: { full, thumb }, draft, aiNote, status: "ready" });
+				update(entry.id, { keys: { full, thumb }, draft, status: "ready" });
 				return { ...entry, keys: { full, thumb }, draft, processed };
 			} catch (e) {
 				update(entry.id, { status: "error", error: errorText(e) });
 				return null;
 			}
 		},
-		[bg, enhance, settings, aiOn, update],
+		[bg, enhance, settings, update],
+	);
+
+	// AI tagging runs in the background: the form is usable right away and the result only
+	// fills fields the user has not touched yet (also after saving, via PATCH).
+	const touched = useRef(new Map<string, Set<string>>());
+	const savedIds = useRef(new Map<string, string>());
+
+	const markTouched = (id: string, before: ItemInput, after: ItemInput) => {
+		const set = touched.current.get(id) ?? new Set<string>();
+		for (const k of Object.keys(after) as (keyof ItemInput)[]) {
+			if (JSON.stringify(before[k]) !== JSON.stringify(after[k])) set.add(k);
+		}
+		touched.current.set(id, set);
+	};
+
+	const startTagging = useCallback(
+		(id: string, processed: ProcessedImage) => {
+			if (!aiOn) return;
+			update(id, { aiSince: Date.now(), aiNote: undefined });
+			const colorKey = nearestColorKey(processed.colorHex);
+			api<ItemInput>("/api/ai/tag", { method: "POST", body: { image: processed.ai, colorHint: colorKey ?? undefined } })
+				.then(async (tags) => {
+					const skip = touched.current.get(id) ?? new Set<string>();
+					// Only take what the model actually filled in – empty fields keep the pixel-based guess.
+					const patch = Object.fromEntries(
+						Object.entries(tags).filter(([k, v]) => !skip.has(k) && v != null && v !== "" && !(Array.isArray(v) && !v.length)),
+					) as ItemInput;
+					setEntries((list) => list.map((e) => (e.id === id ? { ...e, aiSince: undefined, draft: { ...e.draft, ...patch } } : e)));
+					const savedId = savedIds.current.get(id);
+					if (savedId && Object.keys(patch).length) await save.mutateAsync({ id: savedId, data: patch });
+				})
+				.catch((e: unknown) => update(id, { aiSince: undefined, aiNote: `KI-Erkennung fehlgeschlagen: ${errorText(e)}` }));
+		},
+		[aiOn, update, save],
 	);
 
 	// Sequential processing queue.
@@ -151,12 +174,14 @@ export function AddItems() {
 		busy.current = true;
 		void (async () => {
 			const done = pendingSave ?? (await run(next));
+			if (done && !pendingSave && done.processed) startTagging(next.id, done.processed);
 			if (done && batch) {
 				update(next.id, { status: "saving" });
 				try {
 					const item = await save.mutateAsync({
 						data: { ...done.draft, category: done.draft.category ?? "other", needsReview: true },
 					});
+					savedIds.current.set(next.id, item.id);
 					update(next.id, { status: "saved", savedId: item.id });
 				} catch (e) {
 					update(next.id, { status: "error", error: errorText(e) });
@@ -165,7 +190,7 @@ export function AddItems() {
 			busy.current = false;
 			setEntries((x) => [...x]);
 		})();
-	}, [entries, run, batch, save, update, settings]);
+	}, [entries, run, batch, save, update, settings, startTagging]);
 
 	const single = !batch && entries.length === 1 ? entries[0] : undefined;
 
@@ -177,7 +202,8 @@ export function AddItems() {
 			{ data: { ...single.draft, needsReview: false } },
 			{
 				onSuccess: (item) => {
-					toast("Hängt jetzt in deinem Schrank ✨", "ok");
+					savedIds.current.set(single.id, item.id);
+					toast(single.aiSince ? "Hängt im Schrank – die KI ergänzt gleich noch Details ✨" : "Hängt jetzt in deinem Schrank ✨", "ok");
 					navigate(`/teil/${item.id}`, { replace: true });
 				},
 				onError: (e) => {
@@ -287,7 +313,17 @@ export function AddItems() {
 					</div>
 					<div className="card">
 						{single.status === "ready" || single.status === "saving" ? (
-							<ItemForm value={single.draft} onChange={(draft) => update(single.id, { draft })} currency={settings?.currency} />
+							<div className="stack" style={{ gap: 10 }}>
+								{single.aiSince && <AiWait since={single.aiSince} label="KI erkennt das Teil" />}
+								<ItemForm
+									value={single.draft}
+									onChange={(draft) => {
+										markTouched(single.id, single.draft, draft);
+										update(single.id, { draft });
+									}}
+									currency={settings?.currency}
+								/>
+							</div>
 						) : (
 							<div className="stack muted small">
 								<b style={{ color: "var(--text)" }}>Gleich geht's weiter …</b>
@@ -371,7 +407,7 @@ function StatusLine({ entry }: { entry: Entry }) {
 	if (entry.status === "saved")
 		return (
 			<span className="badge ok">
-				<CheckCircle2 size={12} /> gespeichert
+				<CheckCircle2 size={12} /> {entry.aiSince ? "gespeichert · KI …" : "gespeichert"}
 			</span>
 		);
 	if (entry.status === "error") return <span className="badge danger" title={entry.error}>Fehler</span>;

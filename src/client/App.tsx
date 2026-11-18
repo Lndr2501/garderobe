@@ -6,7 +6,6 @@ import { Layout } from "./components/Layout.tsx";
 import { Mascot } from "./components/Mascot.tsx";
 import { AddItems } from "./pages/AddItems.tsx";
 import { Assistant } from "./pages/Assistant.tsx";
-import { CalendarPage } from "./pages/Calendar.tsx";
 import { ItemDetail } from "./pages/ItemDetail.tsx";
 import { ItemEdit } from "./pages/ItemEdit.tsx";
 import { Login } from "./pages/Login.tsx";
@@ -67,7 +66,6 @@ function Routes() {
 				<Route path="/outfits" component={Outfits} />
 				<Route path="/outfits/neu" component={OutfitBuilder} />
 				<Route path="/outfits/:id" component={OutfitBuilder} />
-				<Route path="/kalender" component={CalendarPage} />
 				<Route path="/assistent" component={Assistant} />
 				<Route path="/mehr" component={More} />
 				<Route path="/statistik" component={StatsPage} />

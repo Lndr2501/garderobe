@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { colorHarmony, packingList, seededRandom, suggestOutfits, targetWarmth } from "../src/shared/rules.ts";
 import type { Item } from "../src/shared/types.ts";
-import { extractJson, normalizeBaseUrl, ThinkFilter } from "../src/worker/ai.ts";
+import { chatText, EMPTY_AI, extractJson, normalizeBaseUrl, ThinkFilter } from "../src/worker/ai.ts";
 
 function item(p: Partial<Item>): Item {
 	return {
@@ -110,5 +110,39 @@ describe("rules", () => {
 		const list = packingList(items, { days: 5, avgFeelsLike: 26, rainy: false, activities: ["strand"] });
 		expect(list.filter((e) => e.itemId).length).toBeGreaterThanOrEqual(3);
 		expect(list.some((e) => e.text?.toLowerCase().includes("unterw"))).toBe(true);
+	});
+});
+
+describe("thinking switch", () => {
+	const sse = (text: string) =>
+		new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\ndata: [DONE]\n\n`, {
+			headers: { "content-type": "text/event-stream" },
+		});
+
+	it("asks the model to skip thinking and retries without the flag when a strict provider rejects it", async () => {
+		const bodies: Record<string, unknown>[] = [];
+		const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+			const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+			bodies.push(body);
+			if ("chat_template_kwargs" in body) return new Response('{"error":{"message":"unknown field"}}', { status: 400 });
+			return sse("Bereit!");
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		try {
+			const cfg = { ...EMPTY_AI, baseUrl: "https://strict.example/v1", model: "m" };
+			expect(await chatText(cfg, [{ role: "user", content: "hi" }])).toBe("Bereit!");
+			expect(bodies[0]!.chat_template_kwargs).toEqual({ enable_thinking: false });
+			expect("chat_template_kwargs" in bodies[1]!).toBe(false);
+			// remembered: the next request goes out without the flag straight away
+			await chatText(cfg, [{ role: "user", content: "hi" }]);
+			expect(bodies).toHaveLength(3);
+			expect("chat_template_kwargs" in bodies[2]!).toBe(false);
+			// reasoning on: never sent
+			bodies.length = 0;
+			await chatText({ ...cfg, baseUrl: "https://other.example/v1", reasoning: true }, [{ role: "user", content: "hi" }]);
+			expect("chat_template_kwargs" in bodies[0]!).toBe(false);
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 });

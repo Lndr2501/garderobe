@@ -33,24 +33,31 @@ export function Rack({ items, display, onOpen, label }: RackProps) {
 		const mid = el.scrollLeft + el.clientWidth / 2;
 		const slots = el.children;
 		const shelf = display === "shelf";
+		// Side pieces look turned (narrow) on the rail; shelf pieces just get smaller.
+		const sideX = shelf ? 0.6 : 0.3;
+		const sideY = shelf ? 0.6 : 0.8;
+		const tuck = shelf ? 0.5 : 0.3;
 		let best = 0;
 		let bestD = Infinity;
 		for (let i = 0; i < slots.length; i++) {
 			const s = slots[i] as HTMLElement;
-			const w = s.offsetWidth || 1;
-			const c = s.offsetLeft + w / 2;
-			const p = (c - mid) / w;
+			const step = s.offsetWidth || 1;
+			const c = s.offsetLeft + step / 2;
+			const p = (c - mid) / step;
 			const ap = Math.abs(p);
-			// Centre piece full size, neighbours smaller and tucked behind it, far ones fade out.
-			const scale = 1 - Math.min(ap, 2) * (shelf ? 0.12 : 0.15);
-			const tx = -Math.sign(p) * Math.max(0, ap - 1) * w * 0.32;
-			const opacity = Math.max(0, Math.min(1, 1 - (ap - 2.2) * 1.4));
+			const t = Math.min(ap, 1);
 			const body = s.firstElementChild as HTMLElement | null;
-			if (body) {
-				body.style.transform = `translate(${tx.toFixed(1)}px, 0) scale(${scale.toFixed(3)})`;
-				body.style.opacity = opacity.toFixed(2);
+			const piece = body?.querySelector<HTMLElement>(".piece");
+			if (body && piece) {
+				const w = body.offsetWidth || step;
+				// Neighbours make room for the wide centre piece and tuck slightly behind it.
+				const push = Math.max(0, w / 2 + w * sideX * tuck - step);
+				const tx = Math.sign(p) * t * push;
+				body.style.transform = `translate3d(${tx.toFixed(1)}px,0,0)`;
+				piece.style.transform = `scale(${(1 - t * (1 - sideX)).toFixed(3)}, ${(1 - t * (1 - sideY)).toFixed(3)})`;
+				body.style.opacity = ap > 7 ? "0" : "1";
 			}
-			s.style.zIndex = String(100 - Math.min(99, Math.round(ap * 10)));
+			s.style.zIndex = String(200 - Math.min(199, Math.round(ap * 10)));
 			if (Math.abs(c - mid) < bestD) {
 				bestD = Math.abs(c - mid);
 				best = i;
@@ -62,7 +69,15 @@ export function Rack({ items, display, onOpen, label }: RackProps) {
 		}
 	}, [display]);
 
+	// Start in the middle of the rail so garments hang on both sides (like a real closet).
+	const started = useRef(false);
 	useLayoutEffect(() => {
+		const el = scrollRef.current;
+		if (el && !started.current && items.length > 2) {
+			const s = el.children[Math.floor(items.length / 2)] as HTMLElement | undefined;
+			if (s) el.scrollLeft = s.offsetLeft + s.offsetWidth / 2 - el.clientWidth / 2;
+			started.current = true;
+		}
 		update();
 	}, [items, update]);
 
@@ -92,7 +107,7 @@ export function Rack({ items, display, onOpen, label }: RackProps) {
 	const current = items[Math.min(center, items.length - 1)];
 
 	return (
-		<div className={`rack ${display === "shelf" ? "shelf" : ""}`} aria-label={label}>
+		<div className={`rack ${display === "shelf" ? "shelf" : ""} ${items.length === 1 ? "single" : ""}`} aria-label={label}>
 			{display === "hanger" && <div className="rail" />}
 			{display === "shelf" && <div className="shelf-board" />}
 			<div

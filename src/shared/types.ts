@@ -104,6 +104,7 @@ export interface AiSettingsPublic {
 	imageModel: string;
 	tryonMode: "edits" | "chat";
 	jsonMode: boolean;
+	reasoning: boolean;
 	hasKey: boolean;
 	keyHint: string;
 	configured: boolean;

@@ -9,6 +9,8 @@ export interface AiConfig {
 	imageModel: string;
 	tryonMode: "edits" | "chat";
 	jsonMode: boolean;
+	/** Let reasoning models think before answering (slower). Off = ask them to answer directly. */
+	reasoning: boolean;
 }
 
 export const EMPTY_AI: AiConfig = {
@@ -19,7 +21,11 @@ export const EMPTY_AI: AiConfig = {
 	imageModel: "",
 	tryonMode: "edits",
 	jsonMode: false,
+	reasoning: false,
 };
+
+/** Providers that rejected the thinking switch – don't send it to them again (per isolate). */
+const NO_THINK_UNSUPPORTED = new Set<string>();
 
 export class AiError extends Error {
 	constructor(
@@ -85,16 +91,24 @@ async function errorFrom(res: Response): Promise<AiError> {
 
 async function postChat(cfg: AiConfig, body: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
 	if (!aiConfigured(cfg)) throw new AiError("Keine KI eingerichtet (Einstellungen → KI).", 400);
-	let res: Response;
-	try {
-		res = await fetch(`${cfg.baseUrl}/chat/completions`, {
-			method: "POST",
-			headers: headers(cfg),
-			body: JSON.stringify(body),
-			signal,
-		});
-	} catch (err) {
-		throw new AiError(`KI-Anbieter nicht erreichbar: ${(err as Error).message}`);
+	const send = async (b: Record<string, unknown>) => {
+		try {
+			return await fetch(`${cfg.baseUrl}/chat/completions`, {
+				method: "POST",
+				headers: headers(cfg),
+				body: JSON.stringify(b),
+				signal,
+			});
+		} catch (err) {
+			throw new AiError(`KI-Anbieter nicht erreichbar: ${(err as Error).message}`);
+		}
+	};
+	let res = await send(body);
+	// Strict providers (e.g. OpenAI) reject unknown fields: retry once without the thinking switch.
+	if (res.status === 400 && "chat_template_kwargs" in body) {
+		NO_THINK_UNSUPPORTED.add(cfg.baseUrl);
+		const { chat_template_kwargs: _drop, ...rest } = body;
+		res = await send(rest);
 	}
 	if (!res.ok) throw await errorFrom(res);
 	return res;
@@ -205,6 +219,8 @@ function chatBody(cfg: AiConfig, messages: ChatMessage[], opts: ChatOptions): Re
 	if (opts.temperature !== undefined) body.temperature = opts.temperature;
 	if (opts.maxTokens) body.max_tokens = opts.maxTokens;
 	if (opts.json && cfg.jsonMode) body.response_format = { type: "json_object" };
+	// Qwen3/GLM/DeepSeek-style templates: skip the hidden thinking phase (much faster, same answers here).
+	if (!cfg.reasoning && !NO_THINK_UNSUPPORTED.has(cfg.baseUrl)) body.chat_template_kwargs = { enable_thinking: false };
 	return body;
 }
 

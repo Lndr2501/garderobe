@@ -2,7 +2,8 @@ import type { Item, ItemInput } from "../../shared/types.ts";
 import { api, imgUrl, uploadImage } from "../api.ts";
 import { autoEnhance, encodePair, hasTransparency, loadCanvas, refineAlpha, trimTransparent } from "./image.ts";
 
-const DONE_KEY = "gd-optimized";
+// v2: new enhancement (clarity) – lets existing photos be optimized once more.
+const DONE_KEY = "gd-optimized-v2";
 
 function doneMap(): Record<string, string> {
 	try {

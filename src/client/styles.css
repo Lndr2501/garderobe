@@ -28,6 +28,8 @@
 	--rail-b: #8e9aac;
 	--shelf-a: #f5efe6;
 	--shelf-b: #c9b9a1;
+	--closet-a: #f3f8ff;
+	--closet-b: #d6e6fa;
 	--safe-top: env(safe-area-inset-top, 0px);
 	--safe-bottom: env(safe-area-inset-bottom, 0px);
 	--tabbar-h: 64px;
@@ -61,6 +63,8 @@
 		--rail-b: #56627a;
 		--shelf-a: #3a4256;
 		--shelf-b: #20283a;
+		--closet-a: #16223a;
+		--closet-b: #0f1a2e;
 		color-scheme: dark;
 	}
 }
@@ -788,50 +792,57 @@ h3 {
 
 /* ---------- Rack (Kleiderstange) ---------- */
 
+/* Light "closet" panel the rails hang in, like a shop wall. */
+.closet {
+	position: relative;
+	border-radius: var(--radius);
+	background: linear-gradient(180deg, var(--closet-a), var(--closet-b));
+	border: 1px solid var(--panel-border);
+	box-shadow: var(--shadow-sm);
+	padding: 12px 0 10px;
+	overflow: hidden;
+}
+
+.closet .section-title {
+	padding-inline: 16px;
+	margin-bottom: 2px;
+}
+
+@media (max-width: 640px) {
+	/* Edge to edge on phones: more garments fit on the rail. */
+	.closet {
+		margin-inline: -16px;
+		border-radius: 0;
+		border-inline: none;
+	}
+}
+
 .rack {
 	position: relative;
 	container-type: inline-size;
-	--slot-w: min(34cqw, 150px);
-	--piece-w: min(56cqw, 236px);
-	--piece-h: min(66cqw, 280px);
-	--hook-h: 30px;
+	/* distance between neighbours on the rail */
+	--slot-w: clamp(38px, 11.5cqw, 64px);
+	/* size of the piece in the middle */
+	--piece-w: min(52cqw, 270px);
+	--piece-h: min(60cqw, 310px);
+	--hook-h: 24px;
 }
 
 .rack.shelf {
-	--slot-w: min(36cqw, 150px);
-	--piece-w: min(46cqw, 200px);
-	--piece-h: min(36cqw, 160px);
+	--slot-w: clamp(56px, 18cqw, 104px);
+	--piece-w: min(38cqw, 190px);
+	--piece-h: min(30cqw, 150px);
 }
 
 .rack .rail {
 	position: absolute;
-	left: 6px;
-	right: 6px;
-	top: 12px;
-	height: 6px;
-	border-radius: 6px;
+	left: 0;
+	right: 0;
+	top: 10px;
+	height: 5px;
 	background: linear-gradient(180deg, var(--rail-a), var(--rail-b));
-	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+	box-shadow: 0 2px 3px rgba(0, 0, 0, 0.14);
 	z-index: 0;
-}
-
-.rack .rail::before,
-.rack .rail::after {
-	content: "";
-	position: absolute;
-	top: -3px;
-	width: 12px;
-	height: 12px;
-	border-radius: 999px;
-	background: var(--rail-b);
-}
-
-.rack .rail::before {
-	left: -4px;
-}
-
-.rack .rail::after {
-	right: -4px;
 }
 
 .rack-scroll {
@@ -844,7 +855,7 @@ h3 {
 	scrollbar-width: none;
 	-webkit-overflow-scrolling: touch;
 	overscroll-behavior-x: contain;
-	padding: 9px calc(50% - var(--slot-w) / 2) 14px;
+	padding: 9px calc(50% - var(--slot-w) / 2) 8px;
 }
 
 .rack-scroll::-webkit-scrollbar {
@@ -853,6 +864,8 @@ h3 {
 
 .rack-slot {
 	flex: 0 0 var(--slot-w);
+	/* without this the slot grows to its (wide) content and the rail gets sparse */
+	min-width: 0;
 	scroll-snap-align: center;
 	display: flex;
 	justify-content: center;
@@ -868,19 +881,18 @@ h3 {
 .rack-slot .slot-body {
 	flex: 0 0 var(--piece-w);
 	width: var(--piece-w);
-	transform-origin: 50% 0;
 	will-change: transform;
 }
 
 .rack-slot .swing {
-	transform-origin: 50% 4px;
+	transform-origin: 50% 2px;
 	display: flex;
 	flex-direction: column;
 	align-items: center;
 }
 
 .rack-slot .hook {
-	width: 22px;
+	width: 17px;
 	height: var(--hook-h);
 	color: var(--rail-b);
 	flex: none;
@@ -891,20 +903,22 @@ h3 {
 .rack-slot .piece {
 	width: var(--piece-w);
 	height: var(--piece-h);
-	margin-top: -7px;
+	margin-top: -6px;
 	position: relative;
 	z-index: 1;
 	display: flex;
 	align-items: flex-start;
 	justify-content: center;
 	pointer-events: none;
+	transform-origin: 50% 0;
+	will-change: transform;
 }
 
 .rack-slot .piece img {
 	max-width: 100%;
 	max-height: 100%;
 	object-fit: contain;
-	filter: drop-shadow(0 8px 10px rgba(20, 30, 50, 0.2));
+	filter: drop-shadow(0 6px 8px rgba(20, 30, 50, 0.22));
 }
 
 .rack-slot.center .swing {
@@ -958,14 +972,14 @@ h3 {
 	padding-bottom: 26px;
 }
 
-.rack.shelf .rack-slot .slot-body {
+.rack.shelf .rack-slot .piece {
 	transform-origin: 50% 100%;
 }
 
 .rack.shelf .shelf-board {
 	position: absolute;
-	left: 4px;
-	right: 4px;
+	left: 0;
+	right: 0;
 	top: calc(var(--piece-h) + 2px);
 	height: 16px;
 	border-radius: 6px;
@@ -1514,63 +1528,6 @@ h3 {
 	color: var(--muted);
 }
 
-/* Calendar */
-
-.cal {
-	display: grid;
-	grid-template-columns: repeat(7, minmax(0, 1fr));
-	gap: 6px;
-}
-
-.cal .wd {
-	text-align: center;
-	font-size: 0.72rem;
-	font-weight: 800;
-	color: var(--faint);
-	padding-bottom: 2px;
-}
-
-.cal-day {
-	position: relative;
-	aspect-ratio: 0.8;
-	border-radius: 12px;
-	border: 1px solid var(--line);
-	background: var(--panel);
-	padding: 4px;
-	display: flex;
-	flex-direction: column;
-	align-items: stretch;
-	overflow: hidden;
-	font-size: 0.75rem;
-	font-weight: 800;
-	color: var(--muted);
-}
-
-.cal-day.out {
-	opacity: 0.35;
-}
-
-.cal-day.today {
-	border-color: var(--accent);
-	box-shadow: 0 0 0 2px var(--accent-soft);
-	color: var(--accent);
-}
-
-.cal-day .mini {
-	flex: 1;
-	display: grid;
-	grid-template-columns: 1fr 1fr;
-	gap: 1px;
-	margin-top: 2px;
-}
-
-.cal-day .mini img {
-	width: 100%;
-	height: 100%;
-	object-fit: contain;
-	min-height: 0;
-}
-
 /* Chat */
 
 .chat {
@@ -1893,4 +1850,31 @@ h3 {
 .segmented button svg {
 	vertical-align: -3px;
 	margin-right: 4px;
+}
+
+/* ---------- AI waiting indicator ---------- */
+
+.ai-wait {
+	display: inline-flex;
+	align-items: flex-start;
+	gap: 8px;
+	font-size: 0.82rem;
+	line-height: 1.35;
+	color: var(--text);
+	padding: 8px 12px;
+	border-radius: 14px;
+	background: var(--accent-soft);
+}
+
+.ai-wait .spinner {
+	width: 15px;
+	height: 15px;
+	flex: none;
+	margin-top: 1px;
+}
+
+.badge.soft {
+	background: transparent;
+	border: 1px solid var(--line);
+	color: var(--muted);
 }

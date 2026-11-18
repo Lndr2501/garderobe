@@ -203,9 +203,13 @@ export function autoEnhance(c: HTMLCanvasElement, hasAlpha: boolean): boolean {
 		d[i + 2] = l + (b - l) * sat;
 	}
 
+	// "Clarity": boost mid-scale local contrast so knit, ribs and seams of dark fabric become visible.
+	const brightness = sum / total / 255;
+	clarity(img, hasAlpha, brightness < 0.3 ? 0.9 : brightness < 0.5 ? 0.6 : 0.35);
+
 	// unsharp mask (3x3 box), only on visible pixels
 	const src = new Uint8ClampedArray(d);
-	const amount = 0.35;
+	const amount = brightness < 0.3 ? 0.5 : 0.35;
 	for (let y = 1; y < h - 1; y++) {
 		for (let x = 1; x < w - 1; x++) {
 			const i = (y * w + x) * 4;
@@ -220,6 +224,70 @@ export function autoEnhance(c: HTMLCanvasElement, hasAlpha: boolean): boolean {
 	}
 	ctx.putImageData(img, 0, 0);
 	return true;
+}
+
+function blank(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
+	const c = document.createElement("canvas");
+	c.width = w;
+	c.height = h;
+	const ctx = c.getContext("2d", { willReadFrequently: true })!;
+	ctx.imageSmoothingEnabled = true;
+	ctx.imageSmoothingQuality = "high";
+	return [c, ctx];
+}
+
+/**
+ * Large-radius blur via repeated halving on the GPU-backed canvas (cheap, alpha-aware:
+ * transparent background does not bleed into the garment colors).
+ */
+function blurredCopy(img: ImageData, radiusFraction: number): Uint8ClampedArray {
+	const { width: w, height: h } = img;
+	const [src, sctx] = blank(w, h);
+	sctx.putImageData(img, 0, 0);
+	const target = Math.max(8, Math.round(1 / radiusFraction));
+	let cur = src;
+	let cw = w;
+	let ch = h;
+	while (Math.max(cw, ch) / 2 >= target) {
+		cw = Math.max(1, Math.ceil(cw / 2));
+		ch = Math.max(1, Math.ceil(ch / 2));
+		const [next, nctx] = blank(cw, ch);
+		nctx.drawImage(cur, 0, 0, cw, ch);
+		cur = next;
+	}
+	// Upscale in two steps so the result is smooth instead of blocky.
+	const [mid, mctx] = blank(Math.min(w, cw * 4), Math.min(h, ch * 4));
+	mctx.drawImage(cur, 0, 0, mid.width, mid.height);
+	const [out, octx] = blank(w, h);
+	octx.drawImage(mid, 0, 0, w, h);
+	return octx.getImageData(0, 0, w, h).data;
+}
+
+/** Local contrast on luminance (like Lightroom's clarity); strongest in shadows and midtones. */
+export function clarity(img: ImageData, hasAlpha: boolean, amount: number): void {
+	if (amount <= 0 || img.width < 32 || img.height < 32) return;
+	const d = img.data;
+	let blur: Uint8ClampedArray;
+	try {
+		blur = blurredCopy(img, 1 / 70);
+	} catch {
+		return;
+	}
+	for (let i = 0; i < d.length; i += 4) {
+		if (hasAlpha && d[i + 3]! < 180) continue;
+		const r = d[i]!;
+		const g = d[i + 1]!;
+		const b = d[i + 2]!;
+		const l = r * 0.299 + g * 0.587 + b * 0.114;
+		const lb = blur[i]! * 0.299 + blur[i + 1]! * 0.587 + blur[i + 2]! * 0.114;
+		const x = l / 255;
+		// protect highlights and deep blacks from clipping
+		const weight = Math.max(0.25, 1 - ((x - 0.4) / 0.6) ** 2);
+		const delta = Math.max(-40, Math.min(40, (l - lb) * amount * weight));
+		d[i] = r + delta;
+		d[i + 1] = g + delta;
+		d[i + 2] = b + delta;
+	}
 }
 
 /** WebP encoding in WASM for browsers whose canvas cannot encode WebP (Safari). */
