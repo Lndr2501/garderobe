@@ -143,6 +143,8 @@ export interface TryOn {
 /** text: chat, outfits, shopping, packing · vision: photo recognition · studio: studio pictures · tryon: try-on. */
 export type AiArea = "text" | "vision" | "studio" | "tryon";
 export type AiProviderKind = "openai" | "cloudflare";
+/** Built-in studio-only route, configured by the self-hosted server rather than the provider editor. */
+export const LOCAL_FLUX_PROVIDER = "local-flux";
 
 export interface AiProviderPublic {
 	id: string;
@@ -175,6 +177,8 @@ export interface AiSettingsPublic {
 		imagesToday: number;
 		/** The studio provider counts against a daily allowance (Cloudflare). */
 		metered: boolean;
+		/** SSH has been configured on the server (reachability is checked by the job). */
+		localFluxAvailable: boolean;
 	};
 	/** Which areas are ready to use. */
 	areas: Record<AiArea, boolean>;

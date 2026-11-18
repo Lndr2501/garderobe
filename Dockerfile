@@ -14,7 +14,9 @@ ENV NODE_ENV=production \
 	NODE_OPTIONS=--disable-warning=ExperimentalWarning
 WORKDIR /app
 COPY --from=build --chown=node:node /app/dist ./dist
-RUN mkdir -p /data && chown node:node /data
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-client \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& mkdir -p /data && chown node:node /data
 USER node
 EXPOSE 8000
 VOLUME ["/data"]

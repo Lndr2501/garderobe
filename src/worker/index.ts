@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { pairingItems, packingList, similarItems, suggestOutfits, daysSince } from "../shared/rules.ts";
-import type { AppSettings, Item, OutfitSuggestion, ShoppingCheckResult, Stats, TripWeatherDay, WearDay } from "../shared/types.ts";
+import { LOCAL_FLUX_PROVIDER, type AppSettings, type Item, type OutfitSuggestion, type ShoppingCheckResult, type Stats, type TripWeatherDay, type WearDay } from "../shared/types.ts";
 import { CATEGORY_KEYS, COLOR_KEYS } from "../shared/taxonomy.ts";
 import {
 	AiError,
@@ -57,7 +57,7 @@ import {
 import { chatSystemPrompt, packingPrompt, shoppingPrompt, suggestPrompt, tryOnPrompt, tryOnPromptEn } from "./prompts.ts";
 import { isDate, isObj, sanitizeEntries, sanitizeItem, sanitizeOutfit, str } from "./validate.ts";
 import type { JobQueue } from "./jobs.ts";
-import type { BlobStore, Db } from "./platform.ts";
+import type { Db } from "./platform.ts";
 import { LOCKABLE, startTagging, tagImage, type TagParams } from "./tagging.ts";
 import {
 	applyAiPatch,
@@ -70,14 +70,11 @@ import {
 	reserveUsage,
 	saveAiStore,
 } from "./aisettings.ts";
-import { fluxNeurons, imageDims, startStudio, type StudioParams } from "./studio.ts";
+import { fluxNeurons, imageDims, localStudioAvailable, startStudio, type StudioEnv } from "./studio.ts";
 
-export interface Bindings {
-	DB: Db;
-	IMAGES: BlobStore;
+export interface Bindings extends StudioEnv {
 	ALLOW_SETUP?: string;
 	TAGGER?: JobQueue<TagParams>;
-	STUDIO?: JobQueue<StudioParams>;
 }
 
 type Ctx = Context<{ Bindings: Bindings }>;
@@ -344,11 +341,15 @@ app.post("/api/items/:id/studio", async (c) => {
 	const b = await body(c);
 	const input = aiImageKey(b.image);
 	if (!input) throw new HttpError(400, "Bild für das Studio fehlt");
-	if (!aiConfigured(await loadAi(c.env.DB, "studio"))) {
+	const store = await loadAiStore(c.env.DB);
+	const local = store.routes.studio.provider === LOCAL_FLUX_PROVIDER;
+	if (local ? !localStudioAvailable(c.env) : !aiConfigured(configFor(store, "studio"))) {
 		c.executionCtx.waitUntil(deleteImages(c.env, [input]));
-		throw new HttpError(400, "Kein Bild-Anbieter für Studio-Bilder eingerichtet (Einstellungen → KI).");
+		throw new HttpError(400, local
+			? "Der App-Server ist noch nicht für FLUX.2 per SSH eingerichtet."
+			: "Kein Bild-Anbieter für Studio-Bilder eingerichtet (Einstellungen → KI).");
 	}
-	await startStudio(c.env, id, input);
+	await startStudio(c.env, id, input, local);
 	return c.json(await getItem(c.env.DB, id));
 });
 
@@ -364,12 +365,16 @@ app.post("/api/items/:id/studio/done", async (c) => {
 		c.executionCtx.waitUntil(deleteImages(c.env, [image, thumb]));
 		return c.json(item);
 	}
-	await c.env.DB.prepare(
-		`UPDATE items SET image_studio = ?, thumb_studio = ?, studio_raw = NULL, studio_state = 'done', studio_error = '', prefer_original = 0, updated_at = ? WHERE id = ?`,
+	const saved = await c.env.DB.prepare(
+		`UPDATE items SET image_studio = ?, thumb_studio = ?, studio_raw = NULL, studio_state = 'done', studio_error = '', prefer_original = 0, updated_at = ?
+		 WHERE id = ? AND studio_state = 'raw' AND studio_raw = ?`,
 	)
-		.bind(image, thumb, now(), id)
+		.bind(image, thumb, now(), id, item.studioRaw)
 		.run();
-	c.executionCtx.waitUntil(deleteImages(c.env, [item.imageStudio, item.thumbStudio, item.studioRaw].filter((k) => k !== image && k !== thumb)));
+	const obsolete = saved.meta.changes
+		? [item.imageStudio, item.thumbStudio, item.studioRaw].filter((k) => k !== image && k !== thumb)
+		: [image, thumb];
+	c.executionCtx.waitUntil(deleteImages(c.env, obsolete));
 	return c.json(await getItem(c.env.DB, id));
 });
 
@@ -552,12 +557,13 @@ const DEFAULT_SETTINGS: StoredSettings = {
 	personPhoto: null,
 };
 
-async function loadSettings(db: Db): Promise<AppSettings> {
+async function loadSettings(env: Bindings): Promise<AppSettings> {
+	const db = env.DB;
 	const s = { ...DEFAULT_SETTINGS, ...(await getSetting<Partial<StoredSettings>>(db, "app", {})) };
-	return { ...s, ai: await publicAi(db, await loadAiStore(db)) };
+	return { ...s, ai: await publicAi(db, await loadAiStore(db), localStudioAvailable(env)) };
 }
 
-app.get("/api/settings", async (c) => c.json(await loadSettings(c.env.DB)));
+app.get("/api/settings", async (c) => c.json(await loadSettings(c.env)));
 
 app.patch("/api/settings", async (c) => {
 	const b = await body(c);
@@ -588,7 +594,7 @@ app.patch("/api/settings", async (c) => {
 	}
 	await setSetting(c.env.DB, "app", cur);
 	if (isObj(b.ai)) await saveAiStore(c.env.DB, applyAiPatch(await loadAiStore(c.env.DB), b.ai));
-	return c.json(await loadSettings(c.env.DB));
+	return c.json(await loadSettings(c.env));
 });
 
 // ---------- AI ----------
@@ -720,7 +726,7 @@ app.post("/api/ai/chat", async (c) => {
 		.map((m) => ({ role: m.role as "user" | "assistant", content: m.content.slice(0, 4000) }));
 	if (!messages.length || messages[messages.length - 1]!.role !== "user") throw new HttpError(400, "Nachricht fehlt");
 	const items = await listItems(c.env.DB);
-	const settings = await loadSettings(c.env.DB);
+	const settings = await loadSettings(c.env);
 	const context = [str(b.context, 600) ?? "", `Zuletzt getragen: ${await recentWearText(c.env.DB, items)}`].join(" ");
 	const image = typeof b.image === "string" ? dataUrlFrom(b.image) : null;
 	// With a photo the recognition model answers (it can see), otherwise the text model.
@@ -961,7 +967,7 @@ app.post("/api/ai/tryon", async (c) => {
 	const b = await body(c);
 	const itemIds = Array.isArray(b.itemIds) ? b.itemIds.filter((x): x is string => typeof x === "string").slice(0, 5) : [];
 	if (!itemIds.length) throw new HttpError(400, "Bitte Teile auswählen");
-	const settings = await loadSettings(c.env.DB);
+	const settings = await loadSettings(c.env);
 	if (!settings.personPhoto) throw new HttpError(400, "Bitte zuerst ein Ganzkörperfoto von dir hochladen");
 	const store = await loadAiStore(c.env.DB);
 	const ai = configFor(store, "tryon");
@@ -1014,7 +1020,7 @@ app.get("/api/export", async (c) => {
 		c.env.DB.prepare(`SELECT * FROM outfits`).all<OutfitRow>(),
 		c.env.DB.prepare(`SELECT date, item_id, outfit_id FROM wears ORDER BY date`).all(),
 		c.env.DB.prepare(`SELECT * FROM trips`).all<TripRow>(),
-		loadSettings(c.env.DB),
+		loadSettings(c.env),
 	]);
 	const data = {
 		app: "garderobe",
@@ -1036,7 +1042,7 @@ app.get("/api/export", async (c) => {
 
 app.post("/api/maintenance/cleanup", async (c) => {
 	const items = await listItems(c.env.DB);
-	const settings = await loadSettings(c.env.DB);
+	const settings = await loadSettings(c.env);
 	const { results: tryons } = await c.env.DB.prepare(`SELECT image FROM tryons`).all<{ image: string }>();
 	const used = new Set<string>();
 	for (const i of items) for (const k of [i.imageFront, i.thumbFront, i.imageBack, i.thumbBack, i.imageStudio, i.thumbStudio, i.studioRaw]) if (k) used.add(k);

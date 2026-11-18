@@ -93,3 +93,52 @@ In der App unter **Einstellungen → KI**:
 steht im Dashboard rechts unter „Account details“.
 
 Schlüssel bleiben auf dem Server und werden nie wieder angezeigt.
+
+### Studio-Bilder lokal auf einem Mac (FLUX.2 Klein 4B)
+
+Der App-Server schickt ein Referenzbild per SSH an den Mac. Dort führt der Helfer
+`Flux2CLI i2i --model klein-4b` aus und streamt das PNG zurück. Die App zeigt die
+Warteschlange, die Generierung und das fertige Bild an. Der graue Studiohintergrund
+und die weichen Schatten bleiben erhalten. Das Original bleibt auswählbar.
+Es gibt kein Cloudflare-Kontingent und keinen automatischen Cloud-Fallback für lokale Jobs.
+
+1. **Mac:** „Remote Login“ (Entfernte Anmeldung) aktivieren. Der SSH-Benutzer braucht
+   Zugriff auf Flux2CLI und die Klein-4B-Modelle in seinem Benutzerkonto. Den Helfer aus
+   dem Repo unter `~/.local/libexec/garderobe-flux` installieren, zum Beispiel auf dem Mac:
+   ```bash
+   mkdir -p "$HOME/.local/libexec"
+   install -m 700 scripts/garderobe-flux.sh "$HOME/.local/libexec/garderobe-flux"
+   ```
+   Standardpfad ist `/Applications/Flux2CLI`. Bei Bedarf kann das erzwungene SSH-Kommando
+   `FLUX2CLI_PATH` auf einen anderen absoluten Pfad setzen. Falls eine Einzeldatei-Installation
+   mit „Failed to load the default metallib“ abbricht, braucht sie die passende
+   `mlx.metallib` neben dem Programm. Eine Kopie der CLI samt Bibliothek unter
+   `~/.local/libexec/garderobe-flux-runtime/` wird automatisch bevorzugt.
+2. **SSH:** Einen separaten Ed25519-Schlüssel für die App erzeugen. Den öffentlichen Teil
+   beim Mac-Benutzer in `~/.ssh/authorized_keys` auf den Helfer beschränken. Im folgenden
+   Beispiel den macOS-Kontonamen und den gesamten öffentlichen Schlüssel ersetzen:
+   ```text
+   restrict,command="/bin/bash /Users/macuser/.local/libexec/garderobe-flux" ssh-ed25519 AAAA... garderobe
+   ```
+   Den Hostschlüssel des Macs von einer vertrauenswürdigen Quelle übernehmen, etwa von
+   `/etc/ssh/ssh_host_ed25519_key.pub` direkt am Mac. In die serverseitige `known_hosts`
+   kommt der konfigurierte Host (bei einem anderen Port: `[host]:port`), gefolgt von
+   Schlüsseltyp und öffentlichem Hostschlüssel. Die App akzeptiert keine unbekannten oder
+   geänderten Hostschlüssel.
+3. **App-Server:** Den privaten App-Schlüssel und `known_hosts` nur lesbar in den
+   Container mounten, z. B. unter `/run/flux-ssh/`. Der Nutzer des Node-Prozesses muss
+   sie lesen können (privater Schlüssel: Modus `0600`). Keine Schlüssel ins Repo oder
+   in die App-Einstellungen kopieren. Beispiel für die Serverumgebung:
+   ```dotenv
+   FLUX_SSH_HOST=mac.example.lan
+   FLUX_SSH_USER=macuser
+   FLUX_SSH_PORT=22
+   FLUX_SSH_KEY_FILE=/run/flux-ssh/id_ed25519
+   FLUX_SSH_KNOWN_HOSTS=/run/flux-ssh/known_hosts
+   ```
+   Bei einem Betrieb ohne Docker muss der OpenSSH-Client (`ssh`) im `PATH` liegen.
+4. **App:** Unter **Einstellungen → KI → Studio-Bild** den Anbieter **FLUX.2 Klein 4B
+   (Mac per SSH)** wählen und speichern. Dann in einem Teil **Studio-Bild** drücken.
+   Aktiviere **Automatisch für alle Teile** nur, wenn auch bestehende Teile ohne
+   Studio-Bild und neue Uploads automatisch verarbeitet werden sollen. Der Mac
+   muss für die Verarbeitung wach und vom App-Server erreichbar sein.

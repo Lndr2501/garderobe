@@ -8,9 +8,10 @@ import { ensureSchema } from "../worker/db.ts";
 import app, { type Bindings } from "../worker/index.ts";
 import { JobRunner } from "../worker/jobs.ts";
 import type { Background } from "../worker/platform.ts";
-import { runStudioJob, type StudioParams } from "../worker/studio.ts";
+import { runLocalStudioJob, runStudioJob, type StudioParams } from "../worker/studio.ts";
 import { runTagJob, type TagParams } from "../worker/tagging.ts";
 import { FileBlobStore } from "./files.ts";
+import { createFluxStudio } from "./flux.ts";
 import { SqliteDb } from "./sqlite.ts";
 
 const PORT = Number(process.env.PORT ?? 8000);
@@ -25,14 +26,18 @@ const jobs = new JobRunner(db, { concurrency: 3, log });
 // Studio pictures one after another: they may wait a whole day for the free allowance
 // and must not block photo recognition.
 const studioJobs = new JobRunner(db, { concurrency: 1, log });
+// A sleeping Cloudflare job must not block the Mac, and the Mac generates one image at a time.
+const localStudioJobs = new JobRunner(db, { concurrency: 1, log });
 
 const env: Bindings = {
 	DB: db,
 	IMAGES: new FileBlobStore(join(DATA_DIR, "images")),
 	ALLOW_SETUP: process.env.ALLOW_SETUP ?? "false",
+	FLUX_STUDIO: createFluxStudio(process.env),
 };
 env.TAGGER = jobs.register<TagParams>("tag", (params, step) => runTagJob(env, params, step));
 env.STUDIO = studioJobs.register<StudioParams>("studio", (params, step) => runStudioJob(env, params, step));
+env.LOCAL_STUDIO = localStudioJobs.register<StudioParams>("studio-local", (params, step) => runLocalStudioJob(env, params, step));
 
 const background = {
 	waitUntil(p: Promise<unknown>) {
@@ -80,7 +85,7 @@ function publicRequest(req: Request): Request {
 }
 
 await ensureSchema(db);
-const resumed = (await jobs.resume()) + (await studioJobs.resume());
+const resumed = (await jobs.resume()) + (await studioJobs.resume()) + (await localStudioJobs.resume());
 const server = serve({ fetch: (req) => web.fetch(publicRequest(req)), port: PORT, hostname: "0.0.0.0" }, (info) => {
 	console.log(`[garderobe] listening on :${info.port}, data in ${DATA_DIR}${resumed ? `, ${resumed} job(s) resumed` : ""}`);
 });

@@ -39,7 +39,7 @@ export function useItems() {
 		refetchInterval: (q) =>
 			q.state.data?.some(
 				(i) =>
-					(i.aiState === "pending" || i.studioState === "queued" || i.studioState === "running") && Date.now() - Date.parse(i.updatedAt) < 12 * 60_000,
+					i.studioState === "queued" || i.studioState === "running" || (i.aiState === "pending" && Date.now() - Date.parse(i.updatedAt) < 12 * 60_000),
 			)
 				? 4000
 				: false,

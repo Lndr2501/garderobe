@@ -112,7 +112,7 @@ export function ItemDetail() {
 		setBusy("Studio-Bild wird vorbereitet …");
 		try {
 			putItem(await startStudio(item));
-			toast("Studio-Bild ist bestellt – dauert ca. 30 s bis 1 Min", "ok");
+			toast("Studio-Bild zur Warteschlange hinzugefügt", "ok");
 		} catch (e) {
 			toast(errorText(e), "error");
 		} finally {

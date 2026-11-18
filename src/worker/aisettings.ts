@@ -1,6 +1,6 @@
 // AI providers and which one does what. Every area (texts, photo recognition, studio images,
 // try-on) can use its own provider and model. Stored as one JSON setting; API keys never leave the server.
-import type { AiArea, AiProviderKind, AiSettingsPublic } from "../shared/types.ts";
+import { LOCAL_FLUX_PROVIDER, type AiArea, type AiProviderKind, type AiSettingsPublic } from "../shared/types.ts";
 import { AiError, normalizeBaseUrl, type AiConfig } from "./ai.ts";
 import { getSetting, setSetting } from "./db.ts";
 import type { Db } from "./platform.ts";
@@ -140,7 +140,7 @@ const NO_AI: AiConfig = {
 export function configFor(store: AiStore, area: AiArea): AiConfig {
 	const route = store.routes[area];
 	const p = store.providers.find((x) => x.id === route?.provider);
-	if (!route || !p) return { ...NO_AI };
+	if (!route || route.provider === LOCAL_FLUX_PROVIDER || !p) return { ...NO_AI };
 	return providerConfig(p, route.model, route.mode);
 }
 
@@ -216,8 +216,9 @@ export async function releaseUsage(db: Db, provider: string, neurons: number): P
 		.run();
 }
 
-export async function publicAi(db: Db, store: AiStore): Promise<AiSettingsPublic> {
+export async function publicAi(db: Db, store: AiStore, localFluxAvailable = false): Promise<AiSettingsPublic> {
 	const areas = Object.fromEntries(AI_AREAS.map((a) => [a, areaReady(configFor(store, a))])) as Record<AiArea, boolean>;
+	if (store.routes.studio.provider === LOCAL_FLUX_PROVIDER) areas.studio = localFluxAvailable;
 	const studioCfg = configFor(store, "studio");
 	const used = studioCfg.providerId ? await usageToday(db, studioCfg.providerId) : { neurons: 0, images: 0 };
 	return {
@@ -233,7 +234,7 @@ export async function publicAi(db: Db, store: AiStore): Promise<AiSettingsPublic
 			keyHint: p.apiKey ? `…${p.apiKey.slice(-4)}` : "",
 		})),
 		routes: store.routes,
-		studio: { ...store.studio, usedToday: used.neurons, imagesToday: used.images, metered: studioCfg.kind === "cloudflare" },
+		studio: { ...store.studio, usedToday: used.neurons, imagesToday: used.images, metered: studioCfg.kind === "cloudflare", localFluxAvailable },
 		areas,
 		configured: areas.text,
 	};
@@ -264,7 +265,7 @@ export function applyAiPatch(store: AiStore, a: Record<string, unknown>): AiStor
 		for (const raw of a.providers.slice(0, 8)) {
 			if (!isObj(raw)) continue;
 			let id = text(raw.id, 40) || "";
-			if (!/^[a-z0-9-]{1,40}$/.test(id) || seen.has(id)) id = `p${crypto.randomUUID().slice(0, 8)}`;
+			if (!/^[a-z0-9-]{1,40}$/.test(id) || id === LOCAL_FLUX_PROVIDER || seen.has(id)) id = `p${crypto.randomUUID().slice(0, 8)}`;
 			seen.add(id);
 			const prev = old.get(id);
 			const kind: AiProviderKind = raw.kind === "cloudflare" ? "cloudflare" : "openai";
@@ -295,6 +296,11 @@ export function applyAiPatch(store: AiStore, a: Record<string, unknown>): AiStor
 			const cur = next.routes[area];
 			const provider = text(r.provider, 40);
 			const model = text(r.model, 160);
+			if (provider === LOCAL_FLUX_PROVIDER && area !== "studio") throw new AiError("Lokales FLUX ist nur für Studio-Bilder verfügbar.", 400);
+			if ((provider ?? cur.provider) === LOCAL_FLUX_PROVIDER) {
+				next.routes[area] = { provider: LOCAL_FLUX_PROVIDER, model: "klein-4b", mode: "edits" };
+				continue;
+			}
 			next.routes[area] = {
 				provider: provider ?? cur.provider,
 				model: model ?? cur.model,
@@ -345,6 +351,10 @@ export function applyAiPatch(store: AiStore, a: Record<string, unknown>): AiStor
 
 	// Routes pointing at a removed provider are switched off.
 	const ids = new Set(next.providers.map((p) => p.id));
-	for (const area of AI_AREAS) if (next.routes[area].provider && !ids.has(next.routes[area].provider)) next.routes[area] = { ...EMPTY_ROUTE };
+	for (const area of AI_AREAS) {
+		const { provider } = next.routes[area];
+		if (area === "studio" && provider === LOCAL_FLUX_PROVIDER) continue;
+		if (provider && !ids.has(provider)) next.routes[area] = { ...EMPTY_ROUTE };
+	}
 	return next;
 }

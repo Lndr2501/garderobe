@@ -1,6 +1,7 @@
 // "KI-Studio": turns the user's photo of a piece into a clean product shot (FLUX.2 on Cloudflare,
 // or any image model of the chosen provider). Durable background job; on Cloudflare it keeps to the
 // free daily allowance and simply waits for the next day when it is used up.
+import { LOCAL_FLUX_PROVIDER } from "../shared/types.ts";
 import { AiError, aiConfigured, generateImage } from "./ai.ts";
 import { configFor, exhaustUsage, loadAiStore, msUntilNextUtcDay, releaseUsage, reserveUsage } from "./aisettings.ts";
 import { now } from "./db.ts";
@@ -20,6 +21,18 @@ export interface StudioParams {
 export interface StudioEnv extends ImageEnv {
 	DB: Db;
 	STUDIO?: JobQueue<StudioParams>;
+	LOCAL_STUDIO?: JobQueue<StudioParams>;
+	FLUX_STUDIO?: LocalStudioGenerator;
+}
+
+export type LocalStudioGenerator = (
+	prompt: string,
+	image: { data: ArrayBuffer; type: string },
+	size: { width: number; height: number },
+) => Promise<Uint8Array>;
+
+export function localStudioAvailable(env: StudioEnv): boolean {
+	return !!(env.LOCAL_STUDIO && env.FLUX_STUDIO);
 }
 
 export function studioSize(category: string): { width: number; height: number } {
@@ -72,18 +85,62 @@ export function imageDims(b: Uint8Array): { w: number; h: number } | null {
 }
 
 /** Queues a studio picture for an item (replaces a running one). */
-export async function startStudio(env: StudioEnv, itemId: string, input: string): Promise<void> {
+export async function startStudio(env: StudioEnv, itemId: string, input: string, local = false): Promise<void> {
+	const queue = local ? env.LOCAL_STUDIO : env.STUDIO;
 	const jobId = crypto.randomUUID();
 	await env.DB.prepare(`UPDATE items SET studio_state = 'queued', studio_error = '', studio_input = ?, studio_job = ?, updated_at = ? WHERE id = ?`)
 		.bind(input, jobId, now(), itemId)
 		.run();
 	try {
-		if (!env.STUDIO) throw new Error("Studio-Bilder sind hier nicht verfügbar");
-		await env.STUDIO.create({ id: jobId, params: { itemId, jobId, input } });
+		if (!queue) throw new Error("Studio-Bilder sind hier nicht verfügbar");
+		await queue.create({ id: jobId, params: { itemId, jobId, input } });
 	} catch (err) {
-		await env.DB.prepare(`UPDATE items SET studio_state = 'failed', studio_error = ? WHERE id = ? AND studio_job = ?`)
+		await env.DB.prepare(`UPDATE items SET studio_state = 'failed', studio_error = ?, studio_input = NULL WHERE id = ? AND studio_job = ?`)
 			.bind(String((err as Error).message).slice(0, 300), itemId, jobId)
 			.run();
+		await deleteImages(env, [input]);
+	}
+}
+
+/** The local job publishes the PNG directly: a cutout would remove the studio background and shadows. */
+export async function runLocalStudioJob(env: StudioEnv, { itemId, jobId, input }: StudioParams, step: Step): Promise<void> {
+	const db = env.DB;
+	try {
+		const key = await step.do("generate-local", async () => {
+			const result = await db.prepare(`UPDATE items SET studio_state = 'running', updated_at = ? WHERE id = ? AND studio_job = ?`)
+				.bind(now(), itemId, jobId).run();
+			if (!result.meta.changes) return null;
+			const img = await getImageBytes(env, input);
+			if (!img) throw new NonRetryableError("Ausgangsbild fehlt.");
+			if (!env.FLUX_STUDIO) throw new NonRetryableError("Der lokale FLUX-Anbieter ist nicht eingerichtet.");
+			const item = await db.prepare(`SELECT category, subcategory FROM items WHERE id = ?`)
+				.bind(itemId).first<{ category: string; subcategory: string }>();
+			const png = await env.FLUX_STUDIO(studioPrompt(item?.category ?? "", item?.subcategory ?? ""), img, studioSize(item?.category ?? ""));
+			const output = `studio/${jobId}.png`;
+			await putImage(env, output, png, "image/png");
+			return output;
+		});
+		if (!key) return;
+
+		await step.do("publish-local", async () => {
+			const previous = await db.prepare(`SELECT image_studio, thumb_studio, studio_raw FROM items WHERE id = ? AND studio_job = ?`)
+				.bind(itemId, jobId).first<{ image_studio: string | null; thumb_studio: string | null; studio_raw: string | null }>();
+			const result = await db.prepare(
+				`UPDATE items SET studio_state = 'done', image_studio = ?, thumb_studio = NULL, studio_raw = NULL,
+				 studio_error = '', prefer_original = 0, updated_at = ? WHERE id = ? AND studio_job = ?`,
+			).bind(key, now(), itemId, jobId).run();
+			if (!result.meta.changes) await deleteImages(env, [key]);
+			else if (previous) await deleteImages(env, Object.values(previous).filter((old) => old !== key));
+		});
+	} catch (err) {
+		const message = err instanceof Error ? err.message : "Studio-Bild fehlgeschlagen.";
+		await db.prepare(`UPDATE items SET studio_state = 'failed', studio_error = ?, updated_at = ? WHERE id = ? AND studio_job = ?`)
+			.bind(message.slice(0, 300), now(), itemId, jobId).run();
+	} finally {
+		await step.do("cleanup-local", async () => {
+			await deleteImages(env, [input]);
+			await db.prepare(`UPDATE items SET studio_input = NULL WHERE id = ? AND studio_input = ?`).bind(itemId, input).run();
+		});
 	}
 }
 
@@ -130,6 +187,7 @@ export async function runStudioJob(env: StudioEnv, params: StudioParams, step: S
 					if (!(await isCurrent())) return { key: null, quota: false };
 					await setState("running");
 					const store = await loadAiStore(db);
+					if (store.routes.studio.provider === LOCAL_FLUX_PROVIDER) throw new NonRetryableError("Studio-Anbieter wurde geändert. Starte das Studio-Bild erneut.");
 					const cfg = configFor(store, "studio");
 					const img = await getImageBytes(env, input);
 					if (!img) throw new NonRetryableError("Ausgangsbild fehlt.");

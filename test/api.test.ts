@@ -3,7 +3,7 @@ import { MemoryBlobStore } from "../src/server/files.ts";
 import { SqliteDb } from "../src/server/sqlite.ts";
 import app, { type Bindings } from "../src/worker/index.ts";
 import { JobRunner } from "../src/worker/jobs.ts";
-import { runStudioJob, type StudioParams } from "../src/worker/studio.ts";
+import { runLocalStudioJob, runStudioJob, type StudioParams } from "../src/worker/studio.ts";
 import { applyTags, type TagParams } from "../src/worker/tagging.ts";
 import type { AppSettings, Item, ShoppingCheckResult, Stats, Trip, WearDay } from "../src/shared/types.ts";
 
@@ -25,6 +25,8 @@ const env: Bindings = {
 /** Studio pictures run through the real job runner. */
 const studioRunner = new JobRunner(env.DB);
 env.STUDIO = studioRunner.register<StudioParams>("studio", (params, step) => runStudioJob(env, params, step));
+const localStudioRunner = new JobRunner(env.DB, { concurrency: 1 });
+env.LOCAL_STUDIO = localStudioRunner.register<StudioParams>("studio-local", (params, step) => runLocalStudioJob(env, params, step));
 const PW = "super-geheim-123";
 
 class Client {
@@ -95,6 +97,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+	delete env.FLUX_STUDIO;
 	vi.restoreAllMocks();
 });
 
@@ -304,6 +307,78 @@ async function upload(c: Client): Promise<string> {
 }
 
 describe("studio pictures", () => {
+	it("shows configuration status and allows local FLUX only for Studio", async () => {
+		const c = await loggedIn();
+		const routes = { studio: { provider: "local-flux", model: "ignored" } };
+		const saved = await c.json<AppSettings>("/api/settings", { method: "PATCH", body: { ai: { routes } } });
+		expect(saved.ai.routes.studio).toEqual({ provider: "local-flux", model: "klein-4b", mode: "edits" });
+		expect(saved.ai.areas.studio).toBe(false);
+		expect(saved.ai.studio.localFluxAvailable).toBe(false);
+		expect((await c.req("/api/settings", { method: "PATCH", body: { ai: { routes: { tryon: routes.studio } } } })).status).toBe(400);
+
+		const item = await c.json<Item>("/api/items", { body: { name: "Pulli", category: "top" } });
+		const input = await upload(c);
+		const unavailable = await c.req(`/api/items/${item.id}/studio`, { body: { image: input } });
+		expect(unavailable.status).toBe(400);
+		expect(await env.IMAGES.get(input)).toBeNull();
+	});
+
+	it("runs locally without fetching Cloudflare and displays the unmodified PNG after the running state", async () => {
+		const c = await loggedIn();
+		await withStudio(c);
+		const fetchSpy = vi.spyOn(globalThis, "fetch");
+		const output = Promise.withResolvers<Uint8Array>();
+		const generator = vi.fn(() => output.promise);
+		env.FLUX_STUDIO = generator;
+		const saved = await c.json<AppSettings>("/api/settings", {
+			method: "PATCH",
+			body: { ai: { routes: { studio: { provider: "local-flux" } } } },
+		});
+		expect(saved.ai.areas.studio).toBe(true);
+		expect(saved.ai.studio).toMatchObject({ metered: false, imagesToday: 0, localFluxAvailable: true });
+		const front = await upload(c);
+		const item = await c.json<Item>("/api/items", { body: { name: "Pulli", category: "top", imageFront: front } });
+		const input = await upload(c);
+		try {
+			await c.json<Item>(`/api/items/${item.id}/studio`, { body: { image: input } });
+			await expect.poll(async () => (await c.json<Item>(`/api/items/${item.id}`)).studioState).toBe("running");
+			expect(generator).toHaveBeenCalledExactlyOnceWith(
+				expect.stringMatching(/ghost mannequin.*soft contact shadow.*light grey.*Keep every detail/),
+				{ data: PNG_1PX.buffer, type: "image/png" },
+				{ width: 768, height: 1024 },
+			);
+		} finally {
+			output.resolve(PNG_1PX);
+			await localStudioRunner.idle();
+		}
+
+		const done = await c.json<Item>(`/api/items/${item.id}`);
+		expect(done).toMatchObject({ studioState: "done", studioRaw: null, imageFront: front, preferOriginal: false });
+		expect(done.imageStudio).toMatch(/^studio\//);
+		const image = await c.req(`/api/img/${done.imageStudio}`);
+		expect(image.headers.get("Content-Type")).toBe("image/png");
+		expect(new Uint8Array(await image.arrayBuffer())).toEqual(PNG_1PX);
+		expect(await env.IMAGES.get(input)).toBeNull();
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("keeps the original and reports a local failure without cloud fallback", async () => {
+		const c = await loggedIn();
+		env.FLUX_STUDIO = async () => { throw new Error("Mac nicht erreichbar"); };
+		const fetchSpy = vi.spyOn(globalThis, "fetch");
+		await c.json("/api/settings", { method: "PATCH", body: { ai: { routes: { studio: { provider: "local-flux" } } } } });
+		const imageFront = await upload(c);
+		const item = await c.json<Item>("/api/items", { body: { name: "Jeans", category: "bottom", imageFront } });
+		const input = await upload(c);
+		await c.json<Item>(`/api/items/${item.id}/studio`, { body: { image: input } });
+		await localStudioRunner.idle();
+		expect(await c.json<Item>(`/api/items/${item.id}`)).toMatchObject({
+			studioState: "failed", studioError: "Mac nicht erreichbar", imageFront, imageStudio: null,
+		});
+		expect(await env.IMAGES.get(input)).toBeNull();
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
 	it("generates on Cloudflare, books the usage and hands the raw picture to the app", async () => {
 		const c = await loggedIn();
 		await withStudio(c);

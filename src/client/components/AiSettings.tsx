@@ -1,6 +1,6 @@
 import { Bot, CheckCircle2, Cloud, ImageIcon, MessageSquare, Plus, ScanEye, Shirt, Sparkles, Trash2, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import type { AiArea, AiProviderKind, AiProviderPublic, AiRoutePublic, AppSettings } from "../../shared/types.ts";
+import { LOCAL_FLUX_PROVIDER, type AiArea, type AiProviderKind, type AiProviderPublic, type AiRoutePublic, type AppSettings } from "../../shared/types.ts";
 import { api } from "../api.ts";
 import { useSaveSettings } from "../queries.ts";
 import { Segmented, Switch } from "./Inputs.tsx";
@@ -217,6 +217,7 @@ export function AiSettings({ settings }: { settings: AppSettings }) {
 				{AREAS.map((a) => {
 					const r = routes[a.key];
 					const prov = providers.find((p) => p.id === r.provider);
+					const local = a.key === "studio" && r.provider === LOCAL_FLUX_PROVIDER;
 					const listId = `models-${a.key}`;
 					const placeholder =
 						prov?.kind === "cloudflare" ? (a.image ? FLUX : CF_CHAT) : a.image ? "gpt-image-1" : a.key === "vision" ? "Modell mit Bildverständnis" : "gpt-4.1-mini";
@@ -239,18 +240,23 @@ export function AiSettings({ settings }: { settings: AppSettings }) {
 										const id = e.target.value;
 										const np = providers.find((p) => p.id === id);
 										const keepModel = np && prov && np.kind === prov.kind ? r.model : "";
-										const suggested = np?.kind === "cloudflare" ? (a.image ? FLUX : CF_CHAT) : "";
+										const suggested = id === LOCAL_FLUX_PROVIDER ? "klein-4b" : np?.kind === "cloudflare" ? (a.image ? FLUX : CF_CHAT) : "";
 										setRoutes({ ...routes, [a.key]: { ...r, provider: id, model: keepModel || suggested } });
 									}}
 								>
 									<option value="">Aus</option>
+									{a.key === "studio" && (
+										<option value={LOCAL_FLUX_PROVIDER} disabled={!ai.studio.localFluxAvailable}>
+											FLUX.2 Klein 4B (Mac per SSH){!ai.studio.localFluxAvailable && " – Server nicht eingerichtet"}
+										</option>
+									)}
 									{providers.map((p) => (
 										<option key={p.id} value={p.id}>
 											{p.name || p.baseUrl || "Neuer Anbieter"}
 										</option>
 									))}
 								</select>
-								{r.provider && (
+								{r.provider && !local && (
 									<input
 										className="input"
 										aria-label={`Modell für ${a.label}`}
@@ -270,6 +276,7 @@ export function AiSettings({ settings }: { settings: AppSettings }) {
 									))}
 								</datalist>
 							</div>
+							{local && <span className="tiny muted">Die Bilder werden auf deinem Mac verarbeitet, ohne Cloudflare.</span>}
 							{a.image && prov?.kind === "openai" && (
 								<div className="row between wrap">
 									<span className="tiny muted">„Edits“ = /images/edits, „Chat“ = Chat-Modell mit Bildausgabe</span>
