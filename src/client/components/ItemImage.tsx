@@ -2,7 +2,19 @@ import { Shirt } from "lucide-react";
 import { imgUrl } from "../api.ts";
 import type { Item } from "../../shared/types.ts";
 
-export function ItemImage({ item, size = "thumb", side = "front", className }: { item: Item | undefined; size?: "thumb" | "full"; side?: "front" | "back"; className?: string }) {
+export function ItemImage({
+	item,
+	size = "thumb",
+	side = "front",
+	className,
+	onLoad,
+}: {
+	item: Item | undefined;
+	size?: "thumb" | "full";
+	side?: "front" | "back";
+	className?: string;
+	onLoad?: (img: HTMLImageElement) => void;
+}) {
 	if (!item) return null;
 	const key =
 		side === "back"
@@ -19,5 +31,15 @@ export function ItemImage({ item, size = "thumb", side = "front", className }: {
 			</div>
 		);
 	}
-	return <img className={className} src={imgUrl(key)} alt={item.name} loading="lazy" decoding="async" draggable={false} />;
+	return (
+		<img
+			className={className}
+			src={imgUrl(key)}
+			alt={item.name}
+			loading="lazy"
+			decoding="async"
+			draggable={false}
+			onLoad={onLoad ? (e) => onLoad(e.currentTarget) : undefined}
+		/>
+	);
 }

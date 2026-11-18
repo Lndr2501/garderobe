@@ -574,7 +574,11 @@ function dataUrlFrom(v: unknown): string {
 app.post("/api/ai/tag", async (c) => {
 	const b = await body(c);
 	const image = dataUrlFrom(b.image);
+	const hint = str(b.colorHint, 40);
 	const ai = await loadAi(c.env.DB);
+	const ask = hint
+		? `Analysiere dieses Kleidungsstück. Hinweis aus der Pixelanalyse: Die häufigste Farbe ähnelt „${hint}“ (kann durch Licht verfälscht sein).`
+		: "Analysiere dieses Kleidungsstück.";
 	const raw = await chatJson<Record<string, unknown>>(
 		ai,
 		[
@@ -582,8 +586,8 @@ app.post("/api/ai/tag", async (c) => {
 			{
 				role: "user",
 				content: [
-					{ type: "text", text: "Analysiere dieses Kleidungsstück." },
-					{ type: "image_url", image_url: { url: image, detail: "low" } },
+					{ type: "text", text: ask },
+					{ type: "image_url", image_url: { url: image, detail: "high" } },
 				],
 			},
 		],

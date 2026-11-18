@@ -6,8 +6,10 @@ import { api } from "../api.ts";
 import { Segmented, Switch } from "../components/Inputs.tsx";
 import { PageHead } from "../components/Layout.tsx";
 import { errorText, useToast } from "../components/Toast.tsx";
+import { plural } from "../lib/format.ts";
+import { itemsToOptimize, optimizeItem } from "../lib/optimize.ts";
 import { searchPlaces, type Place } from "../lib/weather.ts";
-import { useSaveSettings, useSettings, type SettingsPatch } from "../queries.ts";
+import { useItems, useSaveSettings, useSettings, type SettingsPatch } from "../queries.ts";
 
 const PRESETS = [
 	{ label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4.1-mini", imageModel: "gpt-image-1", tryonMode: "edits" as const },
@@ -355,12 +357,53 @@ function PasswordSection() {
 	);
 }
 
+function OptimizeImages() {
+	const { data: items } = useItems();
+	const qc = useQueryClient();
+	const toast = useToast();
+	const [enhance, setEnhance] = useState(true);
+	const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+	const todo = itemsToOptimize(items ?? []);
+	const run = async () => {
+		const list = todo;
+		setProgress({ done: 0, total: list.length });
+		let failed = 0;
+		for (let i = 0; i < list.length; i++) {
+			try {
+				await optimizeItem(list[i]!, enhance);
+			} catch {
+				failed++;
+			}
+			setProgress({ done: i + 1, total: list.length });
+		}
+		await qc.invalidateQueries({ queryKey: ["items"] });
+		setProgress(null);
+		toast(failed ? `${list.length - failed} optimiert, ${failed} fehlgeschlagen` : `${list.length} Teile optimiert`, failed ? "error" : "ok");
+	};
+	return (
+		<div className="stack" style={{ gap: 8 }}>
+			<div className="row between">
+				<div>
+					<b>Bilder optimieren</b>
+					<div className="small muted">Schärfere Vorschaubilder, kleinere Dateien, saubere Ränder{enhance ? ", heller und kontrastreicher" : ""}.</div>
+				</div>
+				<Switch label="Beim Optimieren aufhellen" on={enhance} onChange={setEnhance} />
+			</div>
+			<button className="btn" disabled={!!progress || todo.length === 0} onClick={() => void run()}>
+				<Sparkles size={16} />{" "}
+				{progress ? `Optimiere ${progress.done} / ${progress.total} …` : todo.length ? `${plural(todo.length, "Teil", "Teile")} optimieren` : "Alles optimiert"}
+			</button>
+		</div>
+	);
+}
+
 function DataSection() {
 	const toast = useToast();
 	const qc = useQueryClient();
 	const [busy, setBusy] = useState(false);
 	return (
 		<Section icon={<Download size={20} />} title="Daten">
+			<OptimizeImages />
 			<div className="row wrap">
 				<a className="btn" href="/api/export" download>
 					<Download size={16} /> Export (JSON)

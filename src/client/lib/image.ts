@@ -1,4 +1,11 @@
 import { COLORS } from "../../shared/taxonomy.ts";
+import { autoEnhance, encodeWebpWasm, refineAlpha } from "./imageFx.ts";
+
+export { autoEnhance, refineAlpha };
+
+/** Stored sizes: full image for detail views, thumbnail for rack/grid (sharp on 3x retina). */
+export const FULL_DIM = 1400;
+export const THUMB_DIM = 640;
 
 export interface ProcessedImage {
 	full: Blob;
@@ -15,6 +22,8 @@ export type Stage = "laden" | "freistellen" | "modell" | "fertig";
 export interface ProcessOptions {
 	removeBg: boolean;
 	quality: "fast" | "best";
+	/** Brightness/contrast/sharpness auto-fix. */
+	enhance?: boolean;
 	onProgress?: (stage: Stage, pct: number) => void;
 }
 
@@ -47,12 +56,29 @@ function dims(d: Drawable): { w: number; h: number } {
 function toCanvas(d: Drawable, maxDim: number): HTMLCanvasElement {
 	const { w, h } = dims(d);
 	const scale = Math.min(1, maxDim / Math.max(w, h));
+	const tw = Math.max(1, Math.round(w * scale));
+	const th = Math.max(1, Math.round(h * scale));
+	// Halve in steps for big reductions – a single drawImage aliases fine fabric texture.
+	let src: Drawable = d;
+	let sw = w;
+	let sh = h;
+	while (sw / 2 > tw * 1.15 && sh / 2 > th * 1.15) {
+		const step = document.createElement("canvas");
+		step.width = Math.round(sw / 2);
+		step.height = Math.round(sh / 2);
+		const sctx = step.getContext("2d")!;
+		sctx.imageSmoothingQuality = "high";
+		sctx.drawImage(src, 0, 0, step.width, step.height);
+		src = step;
+		sw = step.width;
+		sh = step.height;
+	}
 	const c = document.createElement("canvas");
-	c.width = Math.max(1, Math.round(w * scale));
-	c.height = Math.max(1, Math.round(h * scale));
+	c.width = tw;
+	c.height = th;
 	const ctx = c.getContext("2d")!;
 	ctx.imageSmoothingQuality = "high";
-	ctx.drawImage(d, 0, 0, c.width, c.height);
+	ctx.drawImage(src, 0, 0, tw, th);
 	return c;
 }
 
@@ -65,7 +91,7 @@ function transparencyRatio(c: HTMLCanvasElement): number {
 }
 
 /** Crops fully transparent borders and adds a little padding. */
-function trimTransparent(c: HTMLCanvasElement, pad = 0.03): HTMLCanvasElement {
+export function trimTransparent(c: HTMLCanvasElement, pad = 0.03): HTMLCanvasElement {
 	const ctx = c.getContext("2d")!;
 	const { width: w, height: h } = c;
 	const data = ctx.getImageData(0, 0, w, h).data;
@@ -100,11 +126,21 @@ function canvasBlob(c: HTMLCanvasElement, type: string, quality?: number): Promi
 	return new Promise((resolve) => c.toBlob((b) => resolve(b), type, quality));
 }
 
-/** Encodes to WebP when the browser can (keeps alpha, small), otherwise PNG (alpha) or JPEG. */
+let nativeWebp: boolean | undefined;
+
+/**
+ * Encodes to WebP (keeps alpha, small). Safari cannot encode WebP from a canvas,
+ * so a WASM encoder is used there; PNG/JPEG only as last resort.
+ */
 async function encode(c: HTMLCanvasElement, maxDim: number, alpha: boolean): Promise<Blob> {
 	const scaled = toCanvas(c, maxDim);
-	const webp = await canvasBlob(scaled, "image/webp", 0.86);
-	if (webp && webp.type === "image/webp") return webp;
+	if (nativeWebp !== false) {
+		const webp = await canvasBlob(scaled, "image/webp", 0.86);
+		nativeWebp = !!webp && webp.type === "image/webp";
+		if (nativeWebp) return webp!;
+	}
+	const wasm = await encodeWebpWasm(scaled, 0.86);
+	if (wasm) return wasm;
 	if (alpha) {
 		const png = await canvasBlob(scaled, "image/png");
 		if (png) return png;
@@ -114,8 +150,15 @@ async function encode(c: HTMLCanvasElement, maxDim: number, alpha: boolean): Pro
 	return jpg;
 }
 
-function aiDataUrl(c: HTMLCanvasElement): string {
-	const scaled = toCanvas(c, 512);
+/** Encodes the full image and the thumbnail. */
+export async function encodePair(c: HTMLCanvasElement, alpha: boolean): Promise<{ full: Blob; thumb: Blob }> {
+	const full = await encode(c, FULL_DIM, alpha);
+	const thumb = await encode(c, THUMB_DIM, alpha);
+	return { full, thumb };
+}
+
+function aiDataUrl(c: HTMLCanvasElement, maxDim = 1024): string {
+	const scaled = toCanvas(c, maxDim);
 	const out = document.createElement("canvas");
 	out.width = scaled.width;
 	out.height = scaled.height;
@@ -229,17 +272,37 @@ export async function processImage(file: Blob, opts: ProcessOptions): Promise<Pr
 			bgRemoved = true;
 		}
 	}
+	if (bgRemoved) refineAlpha(canvas);
 	if (hasAlpha) canvas = trimTransparent(canvas);
-	const [full, thumb] = await Promise.all([encode(canvas, 1200, hasAlpha), encode(canvas, 380, hasAlpha)]);
+	// Color + AI image from the untouched pixels, the stored image gets the enhancement.
+	const colorHex = dominantColor(canvas, hasAlpha);
+	const ai = aiDataUrl(canvas);
+	if (opts.enhance) autoEnhance(canvas, hasAlpha);
+	const { full, thumb } = await encodePair(canvas, hasAlpha);
 	opts.onProgress?.("fertig", 1);
-	return {
-		full,
-		thumb,
-		ai: aiDataUrl(canvas),
-		colorHex: dominantColor(canvas, hasAlpha),
-		preview: URL.createObjectURL(full),
-		bgRemoved,
-	};
+	return { full, thumb, ai, colorHex, preview: URL.createObjectURL(full), bgRemoved };
+}
+
+/** Loads a stored image (URL or blob) into a canvas for editing. */
+export async function loadCanvas(src: string | Blob, maxDim = 1600): Promise<HTMLCanvasElement> {
+	const blob = typeof src === "string" ? await (await fetch(src, { credentials: "same-origin" })).blob() : src;
+	const d = await loadDrawable(blob);
+	const c = toCanvas(d, maxDim);
+	if ("close" in d && typeof d.close === "function") d.close();
+	return c;
+}
+
+export function hasTransparency(c: HTMLCanvasElement): boolean {
+	return transparencyRatio(c) > 0.02;
+}
+
+/** Copy of a canvas (for undo/reset in the editor). */
+export function cloneCanvas(c: HTMLCanvasElement): HTMLCanvasElement {
+	const out = document.createElement("canvas");
+	out.width = c.width;
+	out.height = c.height;
+	out.getContext("2d")!.drawImage(c, 0, 0);
+	return out;
 }
 
 /** Simple resize/encode for photos that must keep their background (e.g. person photo, shopping check). */
@@ -247,7 +310,7 @@ export async function prepareImage(file: Blob, maxDim = 1400): Promise<{ blob: B
 	const d = await loadDrawable(file);
 	const c = toCanvas(d, maxDim);
 	const blob = (await canvasBlob(c, "image/jpeg", 0.88)) ?? file;
-	return { blob, dataUrl: aiDataUrl(c) };
+	return { blob, dataUrl: aiDataUrl(c, 1024) };
 }
 
 export function isImageFile(f: File): boolean {

@@ -9,6 +9,7 @@ import { PageHead } from "../components/Layout.tsx";
 import { errorText, useToast } from "../components/Toast.tsx";
 import { currentSeason } from "../../shared/taxonomy.ts";
 import { isImageFile, nearestColorKey, processImage, type ProcessedImage, type Stage } from "../lib/image.ts";
+import { useLocal } from "../lib/useLocal.ts";
 import { useSaveItem, useSettings } from "../queries.ts";
 
 type Status = "wait" | "processing" | "uploading" | "tagging" | "ready" | "saving" | "saved" | "error";
@@ -55,6 +56,7 @@ export function AddItems() {
 	const toast = useToast();
 	const [, navigate] = useLocation();
 	const bg = removeBg ?? settings?.bgRemoval.enabled ?? true;
+	const [enhance, setEnhance] = useLocal("gd-enhance", true);
 	const aiOn = !!settings?.ai.configured;
 
 	const update = useCallback((id: string, patch: Partial<Entry>) => {
@@ -103,6 +105,7 @@ export function AddItems() {
 				const processed = await processImage(entry.file, {
 					removeBg: bg,
 					quality: settings?.bgRemoval.quality ?? "best",
+					enhance,
 					onProgress: (stage, pct) => update(entry.id, { stage, pct }),
 				});
 				update(entry.id, { processed, status: "uploading" });
@@ -120,8 +123,10 @@ export function AddItems() {
 				if (aiOn) {
 					update(entry.id, { status: "tagging" });
 					try {
-						const tags = await api<ItemInput>("/api/ai/tag", { method: "POST", body: { image: processed.ai } });
-						draft = { ...draft, ...tags };
+						const tags = await api<ItemInput>("/api/ai/tag", { method: "POST", body: { image: processed.ai, colorHint: colorKey ?? undefined } });
+						// Only take what the model actually filled in – empty fields keep the pixel-based guess.
+						const filled = Object.entries(tags).filter(([, v]) => v != null && v !== "" && !(Array.isArray(v) && !v.length));
+						draft = { ...draft, ...Object.fromEntries(filled) };
 					} catch (e) {
 						aiNote = `KI-Erkennung fehlgeschlagen: ${errorText(e)}`;
 					}
@@ -134,7 +139,7 @@ export function AddItems() {
 				return null;
 			}
 		},
-		[bg, settings, aiOn, update],
+		[bg, enhance, settings, aiOn, update],
 	);
 
 	// Sequential processing queue.
@@ -242,6 +247,13 @@ export function AddItems() {
 							<div className="small muted">Läuft direkt auf deinem Gerät, keine Daten gehen raus.</div>
 						</div>
 						<Switch label="Hintergrund entfernen" on={bg} onChange={setRemoveBg} />
+					</div>
+					<div className="card row between">
+						<div>
+							<b>Foto automatisch verbessern</b>
+							<div className="small muted">Hellt dunkle Fotos auf, mehr Kontrast, schärfer.</div>
+						</div>
+						<Switch label="Foto verbessern" on={enhance} onChange={setEnhance} />
 					</div>
 					{!aiOn && (
 						<div className="card small">

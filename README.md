@@ -7,8 +7,10 @@ OpenAI-kompatible KI-Schnittstelle.
 
 ## Funktionen
 
-- **Schrank**: Kleiderstange (Coverflow) oder Raster, Filter nach Kategorie, Farbe, Saison und Favoriten, Suche.
-- **Fotos**: Kamera, Mediathek, Drag & Drop, Einfügen. Hintergrund wird im Browser entfernt (`@imgly/background-removal`), Vorder- und Rückseite möglich.
+- **Schrank**: Kleiderstange (Karussell, echte Bügel im Foto werden erkannt) oder Raster, Filter nach Kategorie, Farbe, Saison und Favoriten, Suche.
+- **Fotos**: Kamera, Mediathek, Drag & Drop, Einfügen. Hintergrund wird im Browser entfernt (`@imgly/background-removal`), Ränder werden geglättet und Krümel entfernt, dunkle Fotos automatisch aufgehellt. Vorder- und Rückseite möglich.
+- **Bild bearbeiten**: Radierer für Bügel, Hände und Reste, „Foto verbessern“, „Ränder glätten“. In den Einstellungen optimiert „Bilder optimieren“ alle vorhandenen Teile auf einmal.
+- **Bildformat**: WebP (auf Safari per WASM-Encoder `@jsquash/webp`), Vollbild 1400 px, Vorschau 640 px.
 - **KI** (optional, jede OpenAI-kompatible API): erkennt Name, Kategorie, Farbe und Material, schlägt Outfits vor, Chat-Assistent „Bügel“, Packlisten, Shopping-Check, virtuelle Anprobe (`/images/edits` oder Chat mit Bildausgabe).
 - **Ohne KI** laufen alle Vorschläge regelbasiert (Wetter, Farbharmonie, Tragehistorie).
 - **Outfits**: Tagesvorschläge nach Wetter (Open-Meteo), Baukasten mit Zufall und Sperren, Avatar-Ansicht.

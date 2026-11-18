@@ -1,13 +1,14 @@
-export function Hanger({ className = "hanger" }: { className?: string }) {
+/** Just the hook and a short stem – the garment photo itself provides the shoulders. */
+export function HangerHook() {
 	return (
-		<svg className={className} viewBox="0 0 62 34" fill="none" aria-hidden="true">
+		<svg className="hook" viewBox="0 0 24 34" fill="none" aria-hidden="true">
 			<path
-				d="M31 13 C31 9 35 8.5 35 5.5 C35 3 33 1.5 31 1.5 C29 1.5 27.4 2.8 27.2 4.6"
+				d="M12 34 L12 16 C12 12.5 17.6 11.6 17.6 7 C17.6 3.8 15.1 1.6 12 1.6 C8.9 1.6 6.6 3.7 6.5 6.4"
 				stroke="currentColor"
-				strokeWidth="2.4"
+				strokeWidth="2.2"
 				strokeLinecap="round"
+				strokeLinejoin="round"
 			/>
-			<path d="M31 13 L5 28 Q2.5 30 5.5 31 L56.5 31 Q59.5 30 57 28 Z" stroke="currentColor" strokeWidth="2.4" strokeLinejoin="round" />
 		</svg>
 	);
 }

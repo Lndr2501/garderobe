@@ -36,7 +36,7 @@ function Clock() {
 function WeatherCard({ weather, failed }: { weather: WeatherNow | undefined; failed: boolean }) {
 	if (!weather) {
 		return (
-			<div className="glass weather-mini" style={{ minWidth: 120, minHeight: 60 }}>
+			<div className="glass weather-card weather-mini" style={{ minWidth: 120, minHeight: 48 }}>
 				{failed ? (
 					<span className="tiny" style={{ opacity: 0.8 }}>
 						Wetter gerade nicht erreichbar
@@ -50,7 +50,7 @@ function WeatherCard({ weather, failed }: { weather: WeatherNow | undefined; fai
 		);
 	}
 	return (
-		<div className="glass">
+		<div className="glass weather-card">
 			<div className="weather-mini">
 				<WeatherIcon code={weather.code} isDay={weather.isDay} size={30} />
 				<div>
@@ -100,7 +100,9 @@ function TodayCard({ suggestionIds, reason, name }: { suggestionIds: string[]; r
 		<div className="card" style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 14, alignItems: "center" }}>
 			<OutfitCollage items={list} />
 			<div className="stack" style={{ gap: 8 }}>
-				<span className="badge">{showWorn ? "Heute getragen" : "Vorschlag für heute"}</span>
+				<span className="badge" style={{ alignSelf: "flex-start" }}>
+					{showWorn ? "Heute getragen" : "Vorschlag für heute"}
+				</span>
 				<div className="hand" style={{ fontSize: "1.6rem", lineHeight: 1.1 }}>
 					{showWorn ? list.map((i) => i.name).join(", ") : name}
 				</div>

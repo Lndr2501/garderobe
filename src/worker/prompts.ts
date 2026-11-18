@@ -50,7 +50,14 @@ Analysiere das Kleidungsstück auf dem Bild und antworte NUR mit einem JSON-Obje
   "waterproof": true/false,
   "brand": "Marke, nur wenn sichtbar, sonst leer"
 }
-Kategorien: ${CATEGORIES.map((c) => `${c.key} = ${c.label} (${c.examples})`).join("; ")}.`;
+Kategorien: ${CATEGORIES.map((c) => `${c.key} = ${c.label} (${c.examples})`).join("; ")}.
+
+So gehst du vor:
+- Schau genau hin: Kragen (Rundhals, V, Polo, Half-Zip, Kapuze), Ärmellänge, Verschlüsse, Taschen, Bündchen, Strickstruktur. Nenne das Teil so, wie man es im Laden nennen würde (z.B. "Navy Half-Zip Pullover", "Graues Rundhals-Shirt").
+- Farben: Fotos sind oft zu dunkel oder farbstichig. Unterscheide sorgfältig schwarz vs. navy vs. dunkelgrau und weiss vs. creme vs. beige. Nimm die Farbe, die das Teil bei Tageslicht hätte.
+- Material aus der Oberfläche ableiten: Strick/Maschen = Wolle oder Baumwolle-Strick, glatt glänzend = Polyester/Nylon, Köper mit Naht = Denim.
+- Marke nur angeben, wenn ein Logo oder Etikett lesbar ist. Nicht raten.
+- Ein Bügel, eine Hand oder Reste vom Hintergrund gehören nicht zum Kleidungsstück.`;
 }
 
 export function suggestPrompt(

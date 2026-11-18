@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowLeft, Camera, Check, Heart, Pencil, Sparkles, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeft, Camera, Check, Eraser, Heart, Pencil, Sparkles, Trash2 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import { pairingItems } from "../../shared/rules.ts";
@@ -6,12 +6,14 @@ import { categoryDef, colorDef, FORMALITY_LABELS, SEASONS, WARMTH_LABELS } from 
 import type { Item } from "../../shared/types.ts";
 import { uploadImage } from "../api.ts";
 import { Meter, swatchStyle } from "../components/Inputs.tsx";
+import { ImageEditor } from "../components/ImageEditor.tsx";
 import { ItemImage } from "../components/ItemImage.tsx";
 import { PageHead } from "../components/Layout.tsx";
 import { errorText, useToast } from "../components/Toast.tsx";
 import { daysBetween, localDate, relativeDays } from "../lib/date.ts";
 import { money } from "../lib/format.ts";
 import { processImage } from "../lib/image.ts";
+import { useLocal } from "../lib/useLocal.ts";
 import { useDeleteItem, useItems, useOutfits, useSaveItem, useSetWear, useSettings, useTodayWear } from "../queries.ts";
 import { OutfitCollage } from "../components/OutfitCollage.tsx";
 
@@ -31,6 +33,8 @@ export function ItemDetail() {
 	const [wiggle, setWiggle] = useState(false);
 	const [busy, setBusy] = useState("");
 	const backInput = useRef<HTMLInputElement>(null);
+	const [editing, setEditing] = useState<"front" | "back" | null>(null);
+	const [enhance] = useLocal("gd-enhance", true);
 
 	const pairs = useMemo(() => (item && items ? pairingItems(items, item.category, item.colors, item.pattern).slice(0, 12) : []), [item, items]);
 	const inOutfits = (outfits ?? []).filter((o) => item && o.itemIds.includes(item.id));
@@ -77,7 +81,7 @@ export function ItemDetail() {
 		if (!file) return;
 		setBusy("Rückseite wird freigestellt …");
 		try {
-			const p = await processImage(file, { removeBg: settings?.bgRemoval.enabled ?? true, quality: settings?.bgRemoval.quality ?? "best" });
+			const p = await processImage(file, { removeBg: settings?.bgRemoval.enabled ?? true, quality: settings?.bgRemoval.quality ?? "best", enhance });
 			const [full, thumb] = await Promise.all([uploadImage(p.full), uploadImage(p.thumb)]);
 			await save.mutateAsync({ id: item.id, data: { imageBack: full, thumbBack: thumb } });
 			toast("Rückseite gespeichert – tippe aufs Bild zum Umdrehen", "ok");
@@ -129,7 +133,7 @@ export function ItemDetail() {
 							)}
 						</div>
 					</button>
-					<div className="row" style={{ justifyContent: "center", marginTop: 6 }}>
+					<div className="row wrap" style={{ justifyContent: "center", marginTop: 6, gap: 8 }}>
 						{item.imageBack ? (
 							<span className="small faint">Tippen zum Umdrehen ({flipped ? "Rückseite" : "Vorderseite"})</span>
 						) : (
@@ -137,8 +141,14 @@ export function ItemDetail() {
 								<Camera size={15} /> {busy || "Rückseite hinzufügen"}
 							</button>
 						)}
+						{(item.imageFront || item.thumbFront) && (
+							<button className="btn soft small" onClick={() => setEditing(flipped && item.imageBack ? "back" : "front")}>
+								<Eraser size={15} /> Bild bearbeiten
+							</button>
+						)}
 						<input ref={backInput} type="file" accept="image/*" hidden onChange={(e) => void addBack(e.target.files?.[0])} />
 					</div>
+					{editing && <ImageEditor item={item} side={editing} onClose={() => setEditing(null)} />}
 				</div>
 
 				<div className="stack">
