@@ -318,12 +318,12 @@ describe("studio pictures", () => {
 
 		const item = await c.json<Item>("/api/items", { body: { name: "Pulli", category: "top" } });
 		const input = await upload(c);
-		const unavailable = await c.req(`/api/items/${item.id}/studio`, { body: { image: input } });
+		const unavailable = await c.req(`/api/items/${item.id}/studio`, { body: { mode: "render", image: input } });
 		expect(unavailable.status).toBe(400);
 		expect(await env.IMAGES.get(input)).toBeNull();
 	});
 
-	it("runs locally without fetching Cloudflare and publishes the full cutout and thumbnail", async () => {
+	it("publishes a local FLUX redraw and thumbnail only when explicitly requested", async () => {
 		const c = await loggedIn();
 		await withStudio(c);
 		const fetchSpy = vi.spyOn(globalThis, "fetch");
@@ -340,7 +340,7 @@ describe("studio pictures", () => {
 		const item = await c.json<Item>("/api/items", { body: { name: "Pulli", category: "top", imageFront: front } });
 		const input = await upload(c);
 		try {
-			await c.json<Item>(`/api/items/${item.id}/studio`, { body: { image: input } });
+			await c.json<Item>(`/api/items/${item.id}/studio`, { body: { mode: "render", image: input } });
 			await expect.poll(async () => (await c.json<Item>(`/api/items/${item.id}`)).studioState).toBe("running");
 			expect(generator).toHaveBeenCalledExactlyOnceWith(
 				expect.stringMatching(/Straight front view.*realistic 3D volume.*invisible mannequin.*naturally filled chest.*rounded shoulders.*gently shaped sleeves.*no floor, horizon or cast shadow.*exact original color.*knit texture.*embroidery or small logo/),
@@ -364,20 +364,36 @@ describe("studio pictures", () => {
 		expect(fetchSpy).not.toHaveBeenCalled();
 	});
 
+	it("uses the stored original as the default local input instead of redrawing it", async () => {
+		const c = await loggedIn();
+		const original = await upload(c);
+		const item = await c.json<Item>("/api/items", { body: { name: "Pullover", category: "top", imageFront: original } });
+		const cutout = vi.fn(async () => ({ full: PNG_1PX, thumb: PNG_1PX }));
+		env.FLUX_STUDIO = { cutout, generate: vi.fn() };
+		await c.json("/api/settings", { method: "PATCH", body: { ai: { routes: { studio: { provider: "local-flux" } } } } });
+		await c.json<Item>(`/api/items/${item.id}/studio`, { body: {} });
+		await localStudioRunner.idle();
+		const done = await c.json<Item>(`/api/items/${item.id}`);
+		expect(done).toMatchObject({ studioState: "done", imageFront: original });
+		expect(done.imageStudio).not.toBe(original);
+		expect(await env.IMAGES.get(original)).not.toBeNull();
+		expect(cutout).toHaveBeenCalledExactlyOnceWith({ data: PNG_1PX.buffer, type: "image/png" });
+		expect(env.FLUX_STUDIO.generate).not.toHaveBeenCalled();
+	});
+
 	it("keeps the original and reports a local failure without cloud fallback", async () => {
 		const c = await loggedIn();
-		env.FLUX_STUDIO = { generate: async () => { throw new Error("Mac nicht erreichbar"); }, cutout: vi.fn() };
+		env.FLUX_STUDIO = { cutout: async () => { throw new Error("Mac nicht erreichbar"); }, generate: vi.fn() };
 		const fetchSpy = vi.spyOn(globalThis, "fetch");
 		await c.json("/api/settings", { method: "PATCH", body: { ai: { routes: { studio: { provider: "local-flux" } } } } });
 		const imageFront = await upload(c);
 		const item = await c.json<Item>("/api/items", { body: { name: "Jeans", category: "bottom", imageFront } });
-		const input = await upload(c);
-		await c.json<Item>(`/api/items/${item.id}/studio`, { body: { image: input } });
+		await c.json<Item>(`/api/items/${item.id}/studio`, { body: { mode: "original" } });
 		await localStudioRunner.idle();
 		expect(await c.json<Item>(`/api/items/${item.id}`)).toMatchObject({
 			studioState: "failed", studioError: "Mac nicht erreichbar", imageFront, imageStudio: null,
 		});
-		expect(await env.IMAGES.get(input)).toBeNull();
+		expect(await env.IMAGES.get(imageFront)).not.toBeNull();
 		expect(fetchSpy).not.toHaveBeenCalled();
 	});
 

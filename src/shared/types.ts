@@ -34,7 +34,7 @@ export interface Item {
 	userFields: string[];
 	/** Clockwise rotation (deg) the client still has to apply to the photos. */
 	rotate: number;
-	/** AI studio picture (background removed) made from the front photo. */
+	/** Studio picture from the front photo, either a cutout or a generated variant. */
 	imageStudio: string | null;
 	thumbStudio: string | null;
 	/** queued/waiting/running: in the works; raw: generated, the app still removes the background; off: removed by hand. */
@@ -52,6 +52,7 @@ export interface Item {
 }
 
 export type StudioState = "" | "queued" | "waiting" | "running" | "raw" | "done" | "failed" | "off";
+export type StudioMode = "original" | "render";
 
 export type ItemInput = Partial<
 	Omit<

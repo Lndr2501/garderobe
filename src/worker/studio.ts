@@ -14,10 +14,12 @@ export interface StudioParams {
 	itemId: string;
 	/** Only the newest job of an item may write its result. */
 	jobId: string;
-	/** Uploaded JPEG (piece on white) the picture is made from; deleted afterwards. */
+	/** Disposable reference JPEG, unless original or repair points at a stored photo. */
 	input: string;
 	/** Existing opaque Studio PNG; only run foreground segmentation, not FLUX again. */
 	repair?: true;
+	/** Use the stored original without any generative redraw. */
+	original?: true;
 }
 
 export interface StudioEnv extends ImageEnv {
@@ -88,22 +90,25 @@ export function imageDims(b: Uint8Array): { w: number; h: number } | null {
 }
 
 /** Queues a studio picture for an item (replaces a running one). */
-export async function startStudio(env: StudioEnv, itemId: string, input: string, local = false, repair = false): Promise<void> {
+export async function startStudio(
+	env: StudioEnv, itemId: string, input: string, { local = false, repair = false, original = false } = {},
+): Promise<void> {
 	const queue = local ? env.LOCAL_STUDIO : env.STUDIO;
 	const jobId = crypto.randomUUID();
 	const guard = repair ? " AND studio_state = 'done' AND thumb_studio IS NULL AND image_studio = ?" : "";
 	const update = await env.DB.prepare(
-		`UPDATE items SET studio_state = 'queued', studio_error = '', studio_input = ?, studio_job = ?, updated_at = ? WHERE id = ?${guard}`,
-	).bind(input, jobId, now(), itemId, ...(repair ? [input] : [])).run();
+		`UPDATE items SET studio_state = 'queued', studio_error = '', studio_input = ?, studio_job = ?,
+		 prefer_original = CASE WHEN ? THEN 1 ELSE prefer_original END, updated_at = ? WHERE id = ?${guard}`,
+	).bind(input, jobId, original, now(), itemId, ...(repair ? [input] : [])).run();
 	if (!update.meta.changes) return;
 	try {
 		if (!queue) throw new Error("Studio-Bilder sind hier nicht verfügbar");
-		await queue.create({ id: jobId, params: { itemId, jobId, input, ...(repair ? { repair: true } : {}) } });
+		await queue.create({ id: jobId, params: { itemId, jobId, input, ...(repair ? { repair: true } : {}), ...(original ? { original: true } : {}) } });
 	} catch (err) {
 		await env.DB.prepare(`UPDATE items SET studio_state = 'failed', studio_error = ?, studio_input = NULL WHERE id = ? AND studio_job = ?`)
 			.bind(String((err as Error).message).slice(0, 300), itemId, jobId)
 			.run();
-		if (!repair) await deleteImages(env, [input]);
+		if (!repair && !original) await deleteImages(env, [input]);
 	}
 }
 
@@ -115,10 +120,10 @@ export async function repairLegacyStudio(env: StudioEnv): Promise<void> {
 		 AND image_studio = 'studio/' || studio_job || '.png'
 		 AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id = items.studio_job AND jobs.state IN ('queued', 'running'))`,
 	).all<{ id: string; image_studio: string }>();
-	for (const item of results) await startStudio(env, item.id, item.image_studio, true, true);
+	for (const item of results) await startStudio(env, item.id, item.image_studio, { local: true, repair: true });
 }
 
-export async function runLocalStudioJob(env: StudioEnv, { itemId, jobId, input, repair }: StudioParams, step: Step): Promise<void> {
+export async function runLocalStudioJob(env: StudioEnv, { itemId, jobId, input, repair, original }: StudioParams, step: Step): Promise<void> {
 	const db = env.DB;
 	try {
 		const output = await step.do<{ full: string; thumb: string } | string | null>("generate-local", async () => {
@@ -130,7 +135,7 @@ export async function runLocalStudioJob(env: StudioEnv, { itemId, jobId, input, 
 			if (!env.FLUX_STUDIO) throw new NonRetryableError("Der lokale FLUX-Anbieter ist nicht eingerichtet.");
 			const item = await db.prepare(`SELECT category, subcategory FROM items WHERE id = ?`)
 				.bind(itemId).first<{ category: string; subcategory: string }>();
-			const rendered = repair
+			const rendered = repair || original
 				? await env.FLUX_STUDIO.cutout(img)
 				: await env.FLUX_STUDIO.generate(studioPrompt(item?.category ?? "", item?.subcategory ?? "", true), img, studioSize(item?.category ?? ""));
 			const full = newImageKey("image/png", "studio");
@@ -158,11 +163,15 @@ export async function runLocalStudioJob(env: StudioEnv, { itemId, jobId, input, 
 				.bind(itemId, jobId).first<{ image_studio: string | null; thumb_studio: string | null; studio_raw: string | null }>();
 			const result = await db.prepare(
 				`UPDATE items SET studio_state = 'done', image_studio = ?, thumb_studio = ?, studio_raw = NULL,
-				 studio_error = '', prefer_original = CASE WHEN ? THEN prefer_original ELSE 0 END, updated_at = ? WHERE id = ? AND studio_job = ?`,
-			).bind(full, thumb, !!repair, now(), itemId, jobId).run();
-			if (!result.meta.changes) await deleteImages(env, [full, thumb]);
-			// Keep the old opaque render on disk during the upgrade for DB rollback.
-			else if (previous && !repair) await deleteImages(env, Object.values(previous).filter((old) => old !== full && old !== thumb));
+				 studio_error = '', prefer_original = CASE WHEN ? THEN prefer_original ELSE 0 END, updated_at = ?
+				 WHERE id = ? AND studio_job = ? AND (NOT ? OR coalesce(image_front, thumb_front) = ?)`,
+			).bind(full, thumb, !!repair, now(), itemId, jobId, !!original, input).run();
+			if (!result.meta.changes) {
+				await deleteImages(env, [full, thumb]);
+				if (original) throw new Error("Das Originalfoto wurde inzwischen geändert. Bitte erneut freistellen.");
+			}
+			// Retain previous files during a switch to the original or an upgrade, for rollback.
+			else if (previous && !repair && !original) await deleteImages(env, Object.values(previous).filter((old) => old !== full && old !== thumb));
 			if (typeof output === "string") await deleteImages(env, [output]);
 		});
 	} catch (err) {
@@ -171,7 +180,7 @@ export async function runLocalStudioJob(env: StudioEnv, { itemId, jobId, input, 
 			.bind(message.slice(0, 300), now(), itemId, jobId).run();
 	} finally {
 		await step.do("cleanup-local", async () => {
-			if (!repair) await deleteImages(env, [input]);
+			if (!repair && !original) await deleteImages(env, [input]);
 			await db.prepare(`UPDATE items SET studio_input = NULL WHERE id = ? AND studio_input = ?`).bind(itemId, input).run();
 		});
 	}

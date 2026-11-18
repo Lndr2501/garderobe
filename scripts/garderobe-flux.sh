@@ -19,10 +19,13 @@ case "$mode:$width:$height" in
 	:768:1024|:1024:768|studio:768:1024|studio:1024:768)
 		[[ -x "$cli" ]] || exit 69
 		[[ ${#prompt} -le 2000 && "$prompt" == 'Professional e-commerce product photo '* ]] || exit 65 ;;
-	cutout:0:0) [[ "$ext" == png && -z "$prompt" ]] || exit 65 ;;
+	cutout:0:0) [[ -z "$prompt" ]] || exit 65 ;;
 	*) exit 65 ;;
 esac
-case "$ext" in jpg|png|webp) ;; *) exit 65 ;; esac
+case "$mode:$ext" in
+	*:jpg|*:png|*:webp|cutout:gif|cutout:avif) ;;
+	*) exit 65 ;;
+esac
 [[ -z "$mode" || -x "$cutout" ]] || exit 73
 
 dir=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/garderobe-flux.XXXXXXXX")

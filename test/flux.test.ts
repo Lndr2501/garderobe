@@ -50,7 +50,7 @@ cp "$1" "$3"
 		const studio = createFluxStudio(vars)!;
 		expect(await studio.generate(prompt, { data: input, type: "image/png" }, { width: 1024, height: 768 })).toEqual({ full: png, thumb: png });
 		vi.stubEnv("FLUX2CLI_PATH", join(dir, "missing"));
-		expect(await studio.cutout({ data: input, type: "image/png" })).toEqual({ full: png, thumb: png });
+		expect(await studio.cutout({ data: input, type: "image/webp" })).toEqual({ full: png, thumb: png });
 		const args = await readFile(join(dir, "ssh_args"), "utf8");
 		expect(args).toContain("StrictHostKeyChecking=yes\n");
 		expect(args).toContain(`UserKnownHostsFile=${vars.FLUX_SSH_KNOWN_HOSTS}\n`);

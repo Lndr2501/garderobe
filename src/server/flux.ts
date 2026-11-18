@@ -39,9 +39,12 @@ export function createFluxStudio(env: NodeJS.ProcessEnv): LocalStudio | undefine
 	];
 
 	const send = async (mode: "studio" | "cutout", prompt: string, image: StudioReference, width: number, height: number) => {
-		const ext = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }[image.type];
+		const ext = {
+			"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
+			...(mode === "cutout" ? { "image/gif": "gif", "image/avif": "avif" } : {}),
+		}[image.type];
 		if (!ext || !image.data.byteLength || image.data.byteLength > MAX_IMAGE_BYTES) {
-			throw new Error("FLUX braucht ein JPEG-, PNG- oder WebP-Referenzbild bis 12 MB.");
+			throw new Error("Das Bildformat wird auf dem Mac nicht unterstützt oder das Bild ist größer als 12 MB.");
 		}
 		const header = Buffer.from(`${width} ${height} ${ext} ${mode}\n${prompt.replace(/\s+/g, " ").trim()}\n`);
 		return new Promise<StudioCutout>((resolve, reject) => {

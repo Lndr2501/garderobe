@@ -3,7 +3,7 @@ import { useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import { pairingItems } from "../../shared/rules.ts";
 import { categoryDef, colorDef, FORMALITY_LABELS, SEASONS, WARMTH_LABELS } from "../../shared/taxonomy.ts";
-import type { Item } from "../../shared/types.ts";
+import { LOCAL_FLUX_PROVIDER, type Item, type StudioMode } from "../../shared/types.ts";
 import { api, imgUrl, uploadImage } from "../api.ts";
 import { Meter, Segmented, swatchStyle } from "../components/Inputs.tsx";
 import { ImageEditor } from "../components/ImageEditor.tsx";
@@ -102,17 +102,18 @@ export function ItemDetail() {
 	const failed = recognitionFailed(item);
 	const aiOn = !!settings?.ai.areas.vision;
 	const studioOn = !!settings?.ai.areas.studio;
+	const localStudio = settings?.ai.routes.studio.provider === LOCAL_FLUX_PROVIDER;
 	const showingBack = flipped && !!item.imageBack;
 	const showingStudio = !showingBack && hasStudio(item) && !item.preferOriginal;
 	const visibleKey = showingBack ? (item.imageBack ?? item.thumbBack) : frontKey(item, "full");
 	const studioWorking = studioBusy(item);
 	const putItem = (saved: Item) => qc.setQueryData<Item[]>(keys.items, (old) => old?.map((x) => (x.id === saved.id ? saved : x)));
 
-	const makeStudio = async () => {
+	const makeStudio = async (mode: StudioMode = localStudio ? "original" : "render") => {
 		setBusy("Studio-Bild wird vorbereitet …");
 		try {
-			putItem(await startStudio(item));
-			toast("Studio-Bild zur Warteschlange hinzugefügt", "ok");
+			putItem(await startStudio(item, mode));
+			toast(mode === "original" ? "Originalfoto wird freigestellt" : "Studio-Bild zur Warteschlange hinzugefügt", "ok");
 		} catch (e) {
 			toast(errorText(e), "error");
 		} finally {
@@ -241,10 +242,20 @@ export function ItemDetail() {
 						</div>
 					)}
 					<div className="row wrap" style={{ justifyContent: "center", marginTop: 6, gap: 8 }}>
-						{studioOn && (item.imageFront || item.thumbFront) && !showingBack && !studioWorking && item.studioState !== "failed" && (
-							<button className="btn soft small" onClick={() => void makeStudio()} disabled={!!busy}>
-								<Wand2 size={15} /> {hasStudio(item) ? "Studio-Bild erneuern" : "Studio-Bild"}
-							</button>
+						{studioOn && (item.imageFront || item.thumbFront) && !showingBack && !studioWorking && (
+							<>
+								{item.studioState !== "failed" && (
+									<button className="btn soft small" onClick={() => void makeStudio()} disabled={!!busy}>
+										{localStudio ? <Eraser size={15} /> : <Wand2 size={15} />}
+										{localStudio ? "Original freistellen" : hasStudio(item) ? "Studio-Bild erneuern" : "Studio-Bild"}
+									</button>
+								)}
+								{localStudio && (
+									<button className="btn ghost small" aria-describedby="studio-render-note" onClick={() => void makeStudio("render")} disabled={!!busy}>
+										<Sparkles size={15} /> KI-3D-Variante
+									</button>
+								)}
+							</>
 						)}
 						{showingStudio && !studioWorking && (
 							<button className="btn soft small" onClick={() => void dropStudio()} disabled={!!busy}>
@@ -275,6 +286,11 @@ export function ItemDetail() {
 						)}
 						<input ref={backInput} type="file" accept="image/*" hidden onChange={(e) => void addBack(e.target.files?.[0])} />
 					</div>
+					{localStudio && studioOn && (item.imageFront || item.thumbFront) && !showingBack && !studioWorking && (
+						<p className="tiny muted" id="studio-render-note" style={{ textAlign: "center", margin: "6px 0 0" }}>
+							Die KI-3D-Variante zeichnet das Teil neu. Details können abweichen.
+						</p>
+					)}
 					{editing && <ImageEditor item={item} side={editing} onClose={() => setEditing(null)} />}
 				</div>
 

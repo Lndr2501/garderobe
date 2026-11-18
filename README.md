@@ -96,12 +96,12 @@ Schlüssel bleiben auf dem Server und werden nie wieder angezeigt.
 
 ### Studio-Bilder lokal auf einem Mac (FLUX.2 Klein 4B)
 
-Der App-Server schickt ein Referenzbild per SSH an den Mac. Dort führt der Helfer
-`Flux2CLI i2i --model klein-4b` aus und stellt das Kleidungsstück anschließend
-mit macOS Vision frei (auf dem Mac, ohne Modell-Download im Browser). Die App zeigt
-die Warteschlange und danach das Studio-Bild ohne Hintergrund. Das Original bleibt
-auswählbar. Ältere, noch nicht freigestellte lokale Studio-Bilder werden beim
-Serverstart nachbearbeitet, ohne FLUX erneut aufzurufen.
+Bei **Original freistellen** schickt der App-Server das gespeicherte Foto per SSH
+an den Mac. Dort bestimmt macOS Vision den Vordergrund; Muster, Farbe und Logos
+werden nicht neu gezeichnet. Hat das Original bereits einen transparenten Hintergrund,
+wird seine Maske wiederverwendet. Mit **KI-3D-Variante** lässt sich separat
+`Flux2CLI i2i --model klein-4b` starten. Dabei kann die KI Details verändern.
+Beide Varianten liefern ein Bild ohne Hintergrund. Das Original bleibt auswählbar.
 Es gibt kein Cloudflare-Kontingent und keinen automatischen Cloud-Fallback für lokale Jobs.
 
 1. **Mac (macOS 14 oder neuer):** „Remote Login“ (Entfernte Anmeldung) aktivieren.
@@ -143,7 +143,7 @@ Es gibt kein Cloudflare-Kontingent und keinen automatischen Cloud-Fallback für 
    ```
    Bei einem Betrieb ohne Docker muss der OpenSSH-Client (`ssh`) im `PATH` liegen.
 4. **App:** Unter **Einstellungen → KI → Studio-Bild** den Anbieter **FLUX.2 Klein 4B
-   (Mac per SSH)** wählen und speichern. Dann in einem Teil **Studio-Bild** drücken.
+   (Mac per SSH)** wählen und speichern. Dann in einem Teil **Original freistellen** drücken.
    Aktiviere **Automatisch für alle Teile** nur, wenn auch bestehende Teile ohne
    Studio-Bild und neue Uploads automatisch verarbeitet werden sollen. Der Mac
    muss für die Verarbeitung wach und vom App-Server erreichbar sein.

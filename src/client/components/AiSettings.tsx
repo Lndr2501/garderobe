@@ -276,7 +276,7 @@ export function AiSettings({ settings }: { settings: AppSettings }) {
 									))}
 								</datalist>
 							</div>
-							{local && <span className="tiny muted">Die Bilder werden auf deinem Mac verarbeitet, ohne Cloudflare.</span>}
+							{local && <span className="tiny muted">Standard: Das Originalfoto wird auf deinem Mac freigestellt. Eine neu gezeichnete KI-3D-Variante kannst du am Teil separat starten.</span>}
 							{a.image && prov?.kind === "openai" && (
 								<div className="row between wrap">
 									<span className="tiny muted">„Edits“ = /images/edits, „Chat“ = Chat-Modell mit Bildausgabe</span>

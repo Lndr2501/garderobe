@@ -1,4 +1,4 @@
-// macOS 14+: on-device foreground segmentation after FLUX. No network or model downloads.
+// macOS 14+: on-device foreground segmentation. No network or model downloads.
 import CoreImage
 import Foundation
 import ImageIO
@@ -8,23 +8,42 @@ import Vision
 private enum CutoutError: Error { case unreadable, noForeground, unusableMask, encoding }
 
 private func cutout(input: URL, full: URL, thumb: URL) throws {
-    guard let image = CIImage(contentsOf: input) else { throw CutoutError.unreadable }
-    let request = VNGenerateForegroundInstanceMaskRequest()
-    let handler = VNImageRequestHandler(ciImage: image)
-    try handler.perform([request])
-    guard let result = request.results?.first, !result.allInstances.isEmpty else {
-        throw CutoutError.noForeground
-    }
-
-    let buffer = try result.generateScaledMaskForImage(forInstances: result.allInstances, from: handler)
-    let mask = CIImage(cvPixelBuffer: buffer)
+    guard let decoded = CIImage(contentsOf: input, options: [.applyOrientationProperty: true]),
+          decoded.extent.width >= 1, decoded.extent.height >= 1,
+          max(decoded.extent.width, decoded.extent.height) <= 4096 else { throw CutoutError.unreadable }
+    let image = decoded.transformed(by: CGAffineTransform(translationX: -decoded.extent.minX, y: -decoded.extent.minY))
     let context = CIContext()
     let color = CGColorSpace(name: CGColorSpace.sRGB)!
-    let width = Int(mask.extent.width)
-    let height = Int(mask.extent.height)
+    let width = Int(image.extent.width)
+    let height = Int(image.extent.height)
     var alpha = [UInt8](repeating: 0, count: width * height)
-    alpha.withUnsafeMutableBytes { bytes in
-        context.render(mask, toBitmap: bytes.baseAddress!, rowBytes: width, bounds: mask.extent, format: .R8, colorSpace: nil)
+    func readMask(_ src: CIImage, _ format: CIFormat) {
+        alpha.withUnsafeMutableBytes { bytes in
+            context.render(src, toBitmap: bytes.baseAddress!, rowBytes: width, bounds: image.extent, format: format, colorSpace: nil)
+        }
+    }
+
+    // Wardrobe photos may have been cut out already. Reuse their alpha rather than guessing again.
+    readMask(image, .A8)
+    let alreadyTransparent = alpha.lazy.filter { $0 < 16 }.count > width * height / 20
+    let clear = CIImage(color: .clear)
+    let foregroundImage: CIImage
+    if alreadyTransparent {
+        foregroundImage = image
+    } else {
+        let request = VNGenerateForegroundInstanceMaskRequest()
+        let handler = VNImageRequestHandler(ciImage: image)
+        try handler.perform([request])
+        guard let result = request.results?.first, !result.allInstances.isEmpty else {
+            throw CutoutError.noForeground
+        }
+        let buffer = try result.generateScaledMaskForImage(forInstances: result.allInstances, from: handler)
+        let mask = CIImage(cvPixelBuffer: buffer)
+        guard mask.extent == image.extent else { throw CutoutError.unusableMask }
+        readMask(mask, .R8)
+        foregroundImage = image.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: clear.cropped(to: image.extent), kCIInputMaskImageKey: mask
+        ])
     }
     var x0 = width, y0 = height, x1 = -1, y1 = -1, foreground = 0
     for y in 0..<height {
@@ -35,16 +54,14 @@ private func cutout(input: URL, full: URL, thumb: URL) throws {
         }
     }
     // Don't silently return an empty image or the entire original rectangle as a cutout.
-    guard foreground > width * height / 100, foreground < width * height * 96 / 100,
-          mask.extent == image.extent else { throw CutoutError.unusableMask }
+    guard foreground > width * height / 100, foreground < width * height * 96 / 100
+    else { throw CutoutError.unusableMask }
 
     let pad = CGFloat(max(4, Int(Double(max(x1 - x0, y1 - y0)) * 0.025)))
-    let subject = CGRect(x: x0, y: y0, width: x1 - x0 + 1, height: y1 - y0 + 1)
+    // The bitmap is top-down, while Core Image crops from a bottom-left origin.
+    let subject = CGRect(x: x0, y: height - 1 - y1, width: x1 - x0 + 1, height: y1 - y0 + 1)
     let bounds = subject.insetBy(dx: -pad, dy: -pad).integral
-    let clear = CIImage(color: .clear)
-    let cut = image.applyingFilter("CIBlendWithMask", parameters: [
-        kCIInputBackgroundImageKey: clear, kCIInputMaskImageKey: mask
-    ]).cropped(to: bounds).composited(over: clear.cropped(to: bounds)).cropped(to: bounds)
+    let cut = foregroundImage.cropped(to: bounds).composited(over: clear.cropped(to: bounds)).cropped(to: bounds)
     let scale = min(1, 460 / max(bounds.width, bounds.height))
     let small = cut.transformed(by: CGAffineTransform(translationX: -bounds.minX, y: -bounds.minY))
         .applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: scale])

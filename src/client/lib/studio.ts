@@ -2,7 +2,7 @@
 // finishing step (background removal runs in the browser, the server can't decode images).
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
-import type { Item } from "../../shared/types.ts";
+import { LOCAL_FLUX_PROVIDER, type Item, type StudioMode } from "../../shared/types.ts";
 import { api, imgUrl, uploadImage } from "../api.ts";
 import { keys, useItems, useSettings } from "../queries.ts";
 import { aiJpeg, loadCanvas, processImage } from "./image.ts";
@@ -43,14 +43,16 @@ export function studioStatusText(item: Item): string {
 	}
 }
 
-/** Uploads the piece on a light background as reference and queues the studio picture. */
-export async function startStudio(item: Item): Promise<Item> {
+/** Original mode uses the exact stored photo. Only the optional redraw needs a helper upload. */
+export async function startStudio(item: Item, mode: StudioMode): Promise<Item> {
 	const key = item.imageFront ?? item.thumbFront;
 	if (!key) throw new Error("Kein Foto vorhanden");
+	const path = `/api/items/${item.id}/studio`;
+	if (mode === "original") return api<Item>(path, { method: "POST", body: { mode } });
 	const canvas = await loadCanvas(imgUrl(key)!, 1600);
 	// ≤768 px keeps the reference at two 512² tiles (cheaper) and is plenty for the model.
 	const image = await uploadImage(await aiJpeg(canvas, 768));
-	return api<Item>(`/api/items/${item.id}/studio`, { method: "POST", body: { image } });
+	return api<Item>(path, { method: "POST", body: { image, mode } });
 }
 
 const finishing = new Set<string>();
@@ -68,6 +70,7 @@ export function useStudioWork(): void {
 	const put = (saved: Item) => qc.setQueryData<Item[]>(keys.items, (old) => old?.map((x) => (x.id === saved.id ? saved : x)));
 	const quality = settings?.bgRemoval.quality ?? "best";
 	const auto = !!settings?.ai.studio.auto && !!settings?.ai.areas.studio;
+	const mode = settings?.ai.routes.studio.provider === LOCAL_FLUX_PROVIDER ? "original" : "render";
 
 	useEffect(() => {
 		const todo = (items ?? []).filter((i) => i.studioState === "raw" && i.studioRaw && !finishing.has(i.id));
@@ -109,11 +112,11 @@ export function useStudioWork(): void {
 		void (async () => {
 			for (const item of todo) {
 				try {
-					put(await startStudio(item));
+					put(await startStudio(item, mode));
 				} catch (err) {
 					console.warn("studio start failed", item.id, err);
 				}
 			}
 		})();
-	}, [items, auto]);
+	}, [items, auto, mode]);
 }

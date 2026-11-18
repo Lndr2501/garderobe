@@ -334,22 +334,27 @@ app.delete("/api/items/:id", async (c) => {
 
 // ---------- Studio pictures ----------
 
-/** Starts (or restarts) a studio picture from an uploaded helper JPEG of the piece on white. */
+/** Local Studio defaults to the stored original; a generative edit requires an explicit opt-in. */
 app.post("/api/items/:id/studio", async (c) => {
 	const id = c.req.param("id");
-	await getItem(c.env.DB, id);
+	const item = await getItem(c.env.DB, id);
 	const b = await body(c);
-	const input = aiImageKey(b.image);
-	if (!input) throw new HttpError(400, "Bild für das Studio fehlt");
+	if (b.mode !== undefined && b.mode !== "original" && b.mode !== "render") {
+		throw new HttpError(400, "Unbekannter Studio-Modus.");
+	}
 	const store = await loadAiStore(c.env.DB);
 	const local = store.routes.studio.provider === LOCAL_FLUX_PROVIDER;
+	if (b.mode === "original" && !local) throw new HttpError(400, "Originalgetreu freistellen erfordert den lokalen Studio-Anbieter.");
+	const original = local && b.mode !== "render";
+	const input = original ? (item.imageFront ?? item.thumbFront) : aiImageKey(b.image);
+	if (!input) throw new HttpError(400, "Bild für das Studio fehlt");
 	if (local ? !localStudioAvailable(c.env) : !aiConfigured(configFor(store, "studio"))) {
-		c.executionCtx.waitUntil(deleteImages(c.env, [input]));
+		if (!original) c.executionCtx.waitUntil(deleteImages(c.env, [input]));
 		throw new HttpError(400, local
 			? "Der App-Server ist noch nicht für FLUX.2 per SSH eingerichtet."
 			: "Kein Bild-Anbieter für Studio-Bilder eingerichtet (Einstellungen → KI).");
 	}
-	await startStudio(c.env, id, input, local);
+	await startStudio(c.env, id, input, { local, original });
 	return c.json(await getItem(c.env.DB, id));
 });
 
