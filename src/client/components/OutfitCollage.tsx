@@ -8,7 +8,9 @@ const LAYOUT: Record<string, Box> = {
 	outerwear: { left: 2, top: 4, width: 52, height: 46, z: 1 },
 	top: { left: 30, top: 6, width: 48, height: 40, z: 2 },
 	dress: { left: 26, top: 4, width: 50, height: 62, z: 2 },
+	base: { left: 40, top: 2, width: 40, height: 34, z: 1 },
 	bottom: { left: 30, top: 44, width: 42, height: 46, z: 3 },
+	socks: { left: 74, top: 62, width: 22, height: 16, z: 4 },
 	shoes: { left: 68, top: 76, width: 30, height: 20, z: 4 },
 	bag: { left: 70, top: 44, width: 28, height: 26, z: 4 },
 	accessory: { left: 4, top: 56, width: 26, height: 22, z: 4 },
@@ -16,7 +18,7 @@ const LAYOUT: Record<string, Box> = {
 };
 
 const UPPER = new Set(["outerwear", "top", "dress"]);
-const LOWER = new Set(["bottom", "shoes"]);
+const LOWER = new Set(["bottom", "shoes", "socks"]);
 
 /** Few pieces get big boxes; full outfits use the category layout. */
 function boxesFor(items: Item[]): Box[] {

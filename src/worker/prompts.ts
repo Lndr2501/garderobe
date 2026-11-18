@@ -47,6 +47,8 @@ category (genau einer):
 - "outerwear" = Jacke, Mantel, Blazer, Weste, Fleece-Jacke (vorne komplett zu öffnen)
 - "bottom" = Hose, Jeans, Chino, Jogginghose, Shorts, Rock
 - "dress" = Kleid, Jumpsuit, Overall
+- "base" = enge Basisschicht zum Drunterziehen: Thermoshirt, Thermohose, lange Unterhose, Unterhemd, Funktionsunterwäsche, Leggings
+- "socks" = Socken, Strümpfe, Kniestrümpfe, Strumpfhose
 - "shoes" = Sneaker, Stiefel, Hausschuh, Slipper, Sandale, Halbschuh (auch ein einzelner Schuh)
 - "bag" = Tasche, Rucksack
 - "accessory" = Mütze, Cap, Schal, Gürtel, Schmuck, Uhr, Brille
@@ -149,6 +151,9 @@ export function studioPrompt(category: string, kind: string): string {
 		"Keep every detail identical to the reference: exact color, fabric texture, pattern, logo, print, buttons, zipper, seams, wash and fading. Do not add or invent logos, text or decorations.";
 	if (category === "shoes") {
 		return `Professional e-commerce product photo of the exact same pair of shoes${what} as in the reference image, three-quarter side view of the pair, centered, soft diffused studio lighting, subtle soft contact shadow, clean light grey seamless background. ${keep} No person, no feet, no text.`;
+	}
+	if (category === "socks") {
+		return `Professional e-commerce product photo of the exact same pair of socks${what} as in the reference image, shown on invisible feet so they have natural three-dimensional volume, side view, centered, soft diffused studio lighting, subtle soft contact shadow, clean light grey seamless background. ${keep} No person, no legs visible, no text.`;
 	}
 	if (category === "bag" || category === "accessory" || category === "other") {
 		return `Professional e-commerce product photo of the exact same item${what} as in the reference image, front view, standing upright with natural volume, centered, soft diffused studio lighting, subtle soft contact shadow, clean light grey seamless background. ${keep} No person, no text.`;

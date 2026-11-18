@@ -17,6 +17,7 @@ const EMPTY_AI: AiConfig = {
 	reasoning: false,
 };
 import { rotationFor } from "../src/worker/tagging.ts";
+import { addLayer, emptyLayers, idsFromLayers, layersFromIds, moveLayer, zoneOf } from "../src/shared/layers.ts";
 
 function item(p: Partial<Item>): Item {
 	return {
@@ -229,5 +230,36 @@ describe("studio cost", () => {
 	it("waits until just after midnight UTC", () => {
 		const t = Date.UTC(2026, 10, 18, 23, 0);
 		expect(msUntilNextUtcDay(t)).toBe(62 * 60_000);
+	});
+});
+
+describe("layered outfits", () => {
+	const thermo = item({ name: "Thermoshirt", category: "base", subcategory: "Thermoshirt" });
+	const leggings = item({ name: "Thermohose", category: "base", subcategory: "lange Unterhose" });
+	const tee = item({ name: "Shirt", category: "top", subcategory: "T-Shirt" });
+	const pulli = item({ name: "Pulli", category: "top", subcategory: "Strickpullover" });
+	const jacket = item({ name: "Jacke", category: "outerwear", subcategory: "Daunenjacke" });
+	const jeans = item({ name: "Jeans", category: "bottom" });
+	const socks = item({ name: "Socken", category: "socks" });
+	const shoes = item({ name: "Stiefel", category: "shoes" });
+	const map = new Map([thermo, leggings, tee, pulli, jacket, jeans, socks, shoes].map((i) => [i.id, i]));
+
+	it("sorts pieces into body zones", () => {
+		expect([thermo, leggings, tee, jacket, jeans, socks, shoes].map(zoneOf)).toEqual(["torso", "legs", "torso", "torso", "legs", "feet", "feet"]);
+	});
+
+	it("puts new pieces at their natural depth, inside out", () => {
+		let l = emptyLayers();
+		for (const it of [jacket, tee, jeans, shoes, pulli, thermo, socks, leggings]) l = addLayer(l, it, map);
+		expect(l.torso).toEqual([thermo.id, tee.id, pulli.id, jacket.id]);
+		expect(l.legs).toEqual([leggings.id, jeans.id]);
+		expect(l.feet).toEqual([socks.id, shoes.id]);
+		l = moveLayer(l, pulli.id, 1);
+		expect(l.torso).toEqual([thermo.id, tee.id, jacket.id, pulli.id]);
+		expect(layersFromIds(idsFromLayers(l), map)).toEqual(l);
+	});
+
+	it("reads old outfits (jacket listed before the top) the right way round", () => {
+		expect(layersFromIds([jacket.id, tee.id, jeans.id, shoes.id], map).torso).toEqual([tee.id, jacket.id]);
 	});
 });

@@ -5,6 +5,8 @@ export type CategoryKey =
 	| "top"
 	| "dress"
 	| "bottom"
+	| "base"
+	| "socks"
 	| "shoes"
 	| "bag"
 	| "accessory"
@@ -46,6 +48,20 @@ export const CATEGORIES: CategoryDef[] = [
 		singular: "Hose/Rock",
 		display: "hanger",
 		examples: "Jeans, Chino, Jogginghose, Shorts, Rock",
+	},
+	{
+		key: "base",
+		label: "Unterwäsche & Thermo",
+		singular: "Basisschicht",
+		display: "hanger",
+		examples: "Thermoshirt, Thermohose, lange Unterhose, Unterhemd, Leggings",
+	},
+	{
+		key: "socks",
+		label: "Socken",
+		singular: "Socken",
+		display: "shelf",
+		examples: "Socken, Wandersocken, Kniestrümpfe, Strumpfhose",
 	},
 	{
 		key: "shoes",

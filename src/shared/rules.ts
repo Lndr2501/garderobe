@@ -269,6 +269,8 @@ export function packingList(allItems: Item[], opts: PackingOptions): TripEntry[]
 	if (opts.activities.includes("party") || opts.activities.includes("business"))
 		entries.push(...take("top", 1, "für den schicken Anlass", (i) => i.formality >= 3));
 	if (ctx.warmth >= 5) entries.push(...take("accessory", 2, "gegen die Kälte", (i) => i.warmth >= 3));
+	if (ctx.warmth >= 5 || opts.activities.includes("schnee")) entries.push(...take("base", 2, "Thermo-Schicht gegen die Kälte"));
+	const socks = take("socks", Math.min(days + 1, 7), "frische Socken");
 	const seen = new Set<string>();
 	const unique = entries.filter((e) => {
 		if (!e.itemId || seen.has(e.itemId)) return false;
@@ -277,7 +279,7 @@ export function packingList(allItems: Item[], opts: PackingOptions): TripEntry[]
 	});
 	const extras: TripEntry[] = [
 		{ text: "Unterwäsche", qty: days + 1, checked: false },
-		{ text: "Socken", qty: days + 1, checked: false },
+		...(socks.length ? [] : [{ text: "Socken", qty: days + 1, checked: false }]),
 		{ text: "Schlafsachen", qty: 1, checked: false },
 		{ text: "Kulturbeutel", qty: 1, checked: false },
 		{ text: "Ladekabel", qty: 1, checked: false },
@@ -287,7 +289,7 @@ export function packingList(allItems: Item[], opts: PackingOptions): TripEntry[]
 		extras.push({ text: "Badesachen", qty: 1, checked: false }, { text: "Sonnencreme", qty: 1, checked: false });
 	}
 	if (opts.activities.includes("schnee")) extras.push({ text: "Handschuhe & Mütze", qty: 1, checked: false });
-	return [...unique, ...extras];
+	return [...unique, ...socks.filter((e) => !seen.has(e.itemId!)), ...extras];
 }
 
 /** Items that look like duplicates of a candidate (same category + main color). */
@@ -309,6 +311,8 @@ export function pairingItems(allItems: Item[], category: string, colors: string[
 		bag: ["dress", "outerwear", "top"],
 		accessory: ["outerwear", "top"],
 		other: ["top", "bottom"],
+		base: ["top", "bottom", "socks"],
+		socks: ["shoes", "bottom"],
 	};
 	const cats = complementary[category] ?? [];
 	return allItems

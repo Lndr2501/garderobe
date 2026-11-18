@@ -2199,3 +2199,76 @@ h3 {
 		grid-template-columns: 1fr;
 	}
 }
+
+/* ---------- Layered outfits ---------- */
+
+.holo .layer {
+	transition: transform 0.55s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.holo.exploded .figure {
+	transition: transform 0.55s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.holo.exploded .layer {
+	filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.45));
+}
+
+.zone-block {
+	display: grid;
+	gap: 8px;
+}
+
+.zone-block + .zone-block {
+	padding-top: 12px;
+	border-top: 1px solid var(--line);
+}
+
+.layer-row {
+	display: grid;
+	grid-template-columns: 48px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 10px;
+	padding: 6px 8px;
+	border-radius: 12px;
+	background: var(--accent-soft);
+}
+
+.layer-row .thumb {
+	width: 48px;
+	height: 48px;
+	border-radius: 10px;
+	padding: 2px;
+}
+
+.layer-row .name {
+	font-size: 0.88rem;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.layer-row .depth {
+	font-size: 0.72rem;
+	color: var(--muted);
+}
+
+.layer-row .actions {
+	display: flex;
+	gap: 2px;
+}
+
+.layer-row .actions .icon-btn {
+	width: 32px;
+	height: 32px;
+}
+
+.warmth-hint {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	font-size: 0.82rem;
+	color: var(--muted);
+}

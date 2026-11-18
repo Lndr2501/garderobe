@@ -59,7 +59,7 @@ const SOLE_DOWN: Record<string, number> = { unten: 0, rechts: 90, oben: 180, lin
 export function rotationFor(category: CategoryKey | undefined, anchor: string | undefined): number {
 	if (!anchor || !category) return 0;
 	const a = anchor.trim().toLowerCase();
-	if (category === "top" || category === "outerwear" || category === "dress" || category === "bottom") return UPRIGHT[a] ?? 0;
+	if (category === "top" || category === "outerwear" || category === "dress" || category === "bottom" || category === "base") return UPRIGHT[a] ?? 0;
 	if (category === "shoes") return SOLE_DOWN[a] ?? 0;
 	return 0;
 }

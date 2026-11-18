@@ -14,7 +14,7 @@ OpenAI-kompatible KI-Schnittstelle.
 - **KI** (optional, jede OpenAI-kompatible API und Cloudflare Workers AI): erkennt Name, Kategorie, Farbe und Material, schlägt Outfits vor, Chat-Assistent „Bügel“, Packlisten, Shopping-Check, virtuelle Anprobe. Für jeden Bereich (Texte, Erkennung, Studio-Bild, Anprobe) lässt sich ein eigener Anbieter und ein eigenes Modell wählen.
 - **Studio-Bild**: Aus dem eigenen Foto malt ein Bildmodell (z.B. FLUX.2 auf Cloudflare) ein sauberes Produktfoto mit Volumen („Ghost Mannequin“). Die App stellt es frei und zeigt es auf der Detailseite in 3D (Neigen per Maus oder Handy-Sensor). Auf Cloudflare bleibt die App im Gratis-Kontingent und wartet sonst bis zum nächsten Tag.
 - **Ohne KI** laufen alle Vorschläge regelbasiert (Wetter, Farbharmonie, Tragehistorie).
-- **Outfits**: Tagesvorschläge nach Wetter (Open-Meteo), Baukasten mit Zufall und Sperren, Avatar-Ansicht.
+- **Outfits**: Tagesvorschläge nach Wetter (Open-Meteo), Baukasten in Lagen (Oberkörper, Beine, Füsse, Extras – z.B. Thermoshirt → T-Shirt → Pulli → Jacke, Socken → Schuhe) mit Zufall, Sperren, Wärme-Check und 3D-Avatar, der die Lagen auffächert.
 - **Getragen**: „Anziehen“ im Schrank oder „Heute getragen“ beim Teil; fliesst in Statistik und Vorschläge ein (kein eigener Kalender mehr).
 - **Statistik**: Lieblinge, Ladenhüter, Kosten pro Tragen, Farben und Kategorien.
 - **Reisen**: Packliste aus Ziel, Datum, Wettervorhersage und Aktivitäten, mit Abhaken.

@@ -195,6 +195,42 @@ test("ai: connect mock provider, auto-tag, chat, try-on, shopping, packing", asy
 	await page.screenshot({ path: `${SHOTS}/${info.project.name}-trip.png`, fullPage: true });
 });
 
+test("layers: dress inside out and fan the layers apart", async ({ page }, info) => {
+	await login(page);
+	const origin = new URL(page.url()).origin;
+	for (const data of [
+		{ name: `Thermoshirt ${info.project.name}`, category: "base", subcategory: "Thermoshirt" },
+		{ name: `Wollsocken ${info.project.name}`, category: "socks" },
+	]) {
+		expect((await page.request.post("/api/items", { data, headers: { Origin: origin } })).ok()).toBe(true);
+	}
+	await page.goto("/outfits/neu");
+	await page.getByRole("button", { name: `Rote Strickjacke anziehen` }).first().click();
+	await page.getByRole("button", { name: `Shirt ${info.project.name} anziehen`, exact: true }).click();
+	await page.getByRole("button", { name: `Thermoshirt ${info.project.name} anziehen`, exact: true }).click();
+	await page.getByRole("button", { name: `Wollsocken ${info.project.name} anziehen`, exact: true }).click();
+	const torso = page.locator(".zone-block").first().locator(".layer-row .name");
+	await expect(torso).toHaveText(["Rote Strickjacke", `Shirt ${info.project.name}`, `Thermoshirt ${info.project.name}`]);
+	await page.getByRole("button", { name: `Shirt ${info.project.name} weiter nach innen`, exact: true }).click();
+	await expect(torso).toHaveText(["Rote Strickjacke", `Thermoshirt ${info.project.name}`, `Shirt ${info.project.name}`]);
+	await page.getByRole("button", { name: "Lagen auffächern" }).click();
+	await expect(page.locator(".holo.exploded")).toBeVisible();
+	await page.waitForTimeout(700);
+	await page.screenshot({ path: `${SHOTS}/${info.project.name}-layers.png` });
+
+	await page.getByRole("button", { name: "Speichern" }).first().click();
+	await page.getByPlaceholder("z.B. Sonntagsspaziergang").fill(`Zwiebel ${info.project.name}`);
+	await page.locator(".sheet").getByRole("button", { name: "Speichern" }).click();
+	await expect(page).toHaveURL(/\/outfits\/[0-9a-f-]{36}$/);
+	const outfits = (await (await page.request.get("/api/outfits")).json()) as { name: string; itemIds: string[] }[];
+	const items = (await (await page.request.get("/api/items")).json()) as ApiItem[];
+	const names = outfits.find((o) => o.name === `Zwiebel ${info.project.name}`)!.itemIds.map((id) => items.find((i) => i.id === id)!.name);
+	// Stored inside out, zone by zone.
+	expect(names).toEqual([`Shirt ${info.project.name}`, `Thermoshirt ${info.project.name}`, "Rote Strickjacke", `Wollsocken ${info.project.name}`]);
+	await page.reload();
+	await expect(torso).toHaveText(["Rote Strickjacke", `Thermoshirt ${info.project.name}`, `Shirt ${info.project.name}`]);
+});
+
 test("background removal runs on-device and yields a transparent cut-out", async ({ page }, info) => {
 	test.setTimeout(300_000);
 	await login(page);
