@@ -146,6 +146,7 @@ export type AiArea = "text" | "vision" | "studio" | "tryon";
 export type AiProviderKind = "openai" | "cloudflare";
 /** Built-in studio-only route, configured by the self-hosted server rather than the provider editor. */
 export const LOCAL_FLUX_PROVIDER = "local-flux";
+export const LOCAL_FLUX_MODEL = "klein-9b";
 
 export interface AiProviderPublic {
 	id: string;

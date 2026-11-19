@@ -1,6 +1,6 @@
 import { Bot, CheckCircle2, Cloud, ImageIcon, MessageSquare, Plus, ScanEye, Shirt, Sparkles, Trash2, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { LOCAL_FLUX_PROVIDER, type AiArea, type AiProviderKind, type AiProviderPublic, type AiRoutePublic, type AppSettings } from "../../shared/types.ts";
+import { LOCAL_FLUX_MODEL, LOCAL_FLUX_PROVIDER, type AiArea, type AiProviderKind, type AiProviderPublic, type AiRoutePublic, type AppSettings } from "../../shared/types.ts";
 import { api } from "../api.ts";
 import { useSaveSettings } from "../queries.ts";
 import { Segmented, Switch } from "./Inputs.tsx";
@@ -240,14 +240,14 @@ export function AiSettings({ settings }: { settings: AppSettings }) {
 										const id = e.target.value;
 										const np = providers.find((p) => p.id === id);
 										const keepModel = np && prov && np.kind === prov.kind ? r.model : "";
-										const suggested = id === LOCAL_FLUX_PROVIDER ? "klein-4b" : np?.kind === "cloudflare" ? (a.image ? FLUX : CF_CHAT) : "";
+										const suggested = id === LOCAL_FLUX_PROVIDER ? LOCAL_FLUX_MODEL : np?.kind === "cloudflare" ? (a.image ? FLUX : CF_CHAT) : "";
 										setRoutes({ ...routes, [a.key]: { ...r, provider: id, model: keepModel || suggested } });
 									}}
 								>
 									<option value="">Aus</option>
 									{a.key === "studio" && (
 										<option value={LOCAL_FLUX_PROVIDER} disabled={!ai.studio.localFluxAvailable}>
-											FLUX.2 Klein 4B (Mac per SSH){!ai.studio.localFluxAvailable && " – Server nicht eingerichtet"}
+											FLUX.2 Klein 9B (Mac per SSH){!ai.studio.localFluxAvailable && " – Server nicht eingerichtet"}
 										</option>
 									)}
 									{providers.map((p) => (

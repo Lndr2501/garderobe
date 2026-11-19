@@ -311,7 +311,7 @@ describe("studio pictures", () => {
 		const c = await loggedIn();
 		const routes = { studio: { provider: "local-flux", model: "ignored" } };
 		const saved = await c.json<AppSettings>("/api/settings", { method: "PATCH", body: { ai: { routes } } });
-		expect(saved.ai.routes.studio).toEqual({ provider: "local-flux", model: "klein-4b", mode: "edits" });
+		expect(saved.ai.routes.studio).toEqual({ provider: "local-flux", model: "klein-9b", mode: "edits" });
 		expect(saved.ai.areas.studio).toBe(false);
 		expect(saved.ai.studio.localFluxAvailable).toBe(false);
 		expect((await c.req("/api/settings", { method: "PATCH", body: { ai: { routes: { tryon: routes.studio } } } })).status).toBe(400);
@@ -343,7 +343,7 @@ describe("studio pictures", () => {
 			await c.json<Item>(`/api/items/${item.id}/studio`, { body: { mode: "render", image: input } });
 			await expect.poll(async () => (await c.json<Item>(`/api/items/${item.id}`)).studioState).toBe("running");
 			expect(generator).toHaveBeenCalledExactlyOnceWith(
-				expect.stringMatching(/exact sweater.*front view.*natural 3D volume.*invisible mannequin.*soft contact shadow.*light grey background.*knit texture.*small embroidered logo/),
+				expect.stringMatching(/exact sweater.*straight front view.*front panel hangs flat.*knit pattern.*embroidery.*upper-left side light/),
 				{ data: PNG_1PX.buffer, type: "image/png" },
 				{ width: 768, height: 1024 },
 			);

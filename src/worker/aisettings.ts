@@ -1,6 +1,6 @@
 // AI providers and which one does what. Every area (texts, photo recognition, studio images,
 // try-on) can use its own provider and model. Stored as one JSON setting; API keys never leave the server.
-import { LOCAL_FLUX_PROVIDER, type AiArea, type AiProviderKind, type AiSettingsPublic } from "../shared/types.ts";
+import { LOCAL_FLUX_MODEL, LOCAL_FLUX_PROVIDER, type AiArea, type AiProviderKind, type AiSettingsPublic } from "../shared/types.ts";
 import { AiError, normalizeBaseUrl, type AiConfig } from "./ai.ts";
 import { getSetting, setSetting } from "./db.ts";
 import type { Db } from "./platform.ts";
@@ -108,10 +108,14 @@ export async function loadAiStore(db: Db): Promise<AiStore> {
 	const raw = await getSetting<Partial<AiStore> & LegacyAi>(db, "ai", {});
 	if (raw.version !== 2) return migrateLegacy(raw);
 	const base = emptyStore();
+	const routes = { ...base.routes, ...(raw.routes ?? {}) };
+	if (routes.studio?.provider === LOCAL_FLUX_PROVIDER) {
+		routes.studio = { provider: LOCAL_FLUX_PROVIDER, model: LOCAL_FLUX_MODEL, mode: "edits" };
+	}
 	return {
 		version: 2,
 		providers: Array.isArray(raw.providers) ? raw.providers : [],
-		routes: { ...base.routes, ...(raw.routes ?? {}) },
+		routes,
 		studio: { ...base.studio, ...(raw.studio ?? {}) },
 	};
 }
@@ -298,7 +302,7 @@ export function applyAiPatch(store: AiStore, a: Record<string, unknown>): AiStor
 			const model = text(r.model, 160);
 			if (provider === LOCAL_FLUX_PROVIDER && area !== "studio") throw new AiError("Lokales FLUX ist nur für Studio-Bilder verfügbar.", 400);
 			if ((provider ?? cur.provider) === LOCAL_FLUX_PROVIDER) {
-				next.routes[area] = { provider: LOCAL_FLUX_PROVIDER, model: "klein-4b", mode: "edits" };
+				next.routes[area] = { provider: LOCAL_FLUX_PROVIDER, model: LOCAL_FLUX_MODEL, mode: "edits" };
 				continue;
 			}
 			next.routes[area] = {

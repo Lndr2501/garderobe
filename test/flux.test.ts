@@ -28,11 +28,12 @@ exec /bin/bash "$FLUX_TEST_HELPER"
 `, { mode: 0o700 });
 		await writeFile(join(dir, "Flux2CLI"), `#!/bin/bash
 set -eu
-[[ "$1 $2 $3 $4 $5 $6 $7 $8" == 'i2i --model klein-4b --width 1024 --height 768 --output' ]]
+[[ "$1 $2 $3 $4 $5 $6 $7 $8" == 'i2i --model klein-9b --width 1024 --height 768 --output' ]]
 [[ "${"$"}{10}" == "Professional e-commerce product photo of the sweater's \\\"front\\\". Preserve all details." ]]
 [[ "${"$"}{11}" == "--images" ]]
 cmp "${"$"}{12}" "$FLUX_TEST_DIR/expected.png"
 cp "${"$"}{12}" "$9"
+[[ "${"$"}{*:13}" == "--transformer-quant int4 --text-quant 4bit --memory-profile conservative --steps 4 --guidance 1.0 --seed 42" ]]
 echo "CLI progress; must not be mixed with PNG on stdout"
 `, { mode: 0o700 });
 		await writeFile(join(dir, "cutout"), `#!/bin/bash

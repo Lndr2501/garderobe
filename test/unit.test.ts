@@ -20,6 +20,11 @@ describe("local Studio render references", () => {
 		expect(localStudioPrompt("shoes", "", "Hausschuh")).toMatch(/exact slipper.*three-quarter side view.*number of shoes.*Do not add any logo/);
 		expect(localStudioPrompt("shoes", "", "Sneaker")).not.toContain("pair of shoes");
 		expect(localStudioPrompt("top", "", "Strickpullover", ["navy"])).toContain("dark navy blue");
+		const knit = localStudioPrompt("top", "Strickpullover", "Navy Zopfstrick", ["navy"]);
+		expect(knit).toMatch(/hangs flat.*narrow vertical cable columns.*collar label.*upper-left side light/);
+		const shirt = localStudioPrompt("top", "T-Shirt", "", ["schwarz"]);
+		expect(shirt).toMatch(/exact T-shirt.*hangs flat.*original angle and opening of the short sleeves.*original black tones.*upper-left side light/);
+		expect(shirt).not.toMatch(/long sleeves|cable columns/);
 		expect(localStudioPrompt("top", "", "Strickpullover", ["unknown"])).not.toContain("unknown");
 	});
 });

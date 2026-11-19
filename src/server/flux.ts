@@ -38,7 +38,7 @@ export function createFluxStudio(env: NodeJS.ProcessEnv): LocalStudio | undefine
 		"-i", identity, "-l", user, "-p", String(port), "--", host, REMOTE_COMMAND,
 	];
 
-	const send = async (mode: "studio" | "cutout", prompt: string, image: StudioReference, width: number, height: number) => {
+	const send = async (mode: "studio-9b" | "cutout", prompt: string, image: StudioReference, width: number, height: number) => {
 		const ext = {
 			"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
 			...(mode === "cutout" ? { "image/gif": "gif", "image/avif": "avif" } : {}),
@@ -87,7 +87,7 @@ export function createFluxStudio(env: NodeJS.ProcessEnv): LocalStudio | undefine
 		});
 	};
 	return {
-		generate: (prompt, image, { width, height }) => send("studio", prompt, image, width, height),
+		generate: (prompt, image, { width, height }) => send("studio-9b", prompt, image, width, height),
 		cutout: (image) => send("cutout", "", image, 0, 0),
 	};
 }

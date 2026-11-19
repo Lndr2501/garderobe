@@ -94,13 +94,13 @@ steht im Dashboard rechts unter „Account details“.
 
 Schlüssel bleiben auf dem Server und werden nie wieder angezeigt.
 
-### Studio-Bilder lokal auf einem Mac (FLUX.2 Klein 4B)
+### Studio-Bilder lokal auf einem Mac (FLUX.2 Klein 9B)
 
 Bei **Original freistellen** schickt der App-Server das gespeicherte Foto per SSH
 an den Mac. Dort bestimmt macOS Vision den Vordergrund; Muster, Farbe und Logos
 werden nicht neu gezeichnet. Hat das Original bereits einen transparenten Hintergrund,
 wird seine Maske wiederverwendet. Mit **KI-3D-Variante** lässt sich separat
-`Flux2CLI i2i --model klein-4b` starten. Die App legt dafür die Referenz auf ein
+`Flux2CLI i2i --model klein-9b --transformer-quant int4 --text-quant 4bit` starten. Die App legt dafür die Referenz auf ein
 weißes Quadrat mit ca. 4 % Rand pro Seite: 512 × 512 für Oberteile und Sneaker,
 1024 × 1024 für Hosen und Hausschuhe. Die Prompts berücksichtigen u. a. Strick,
 Reißverschluss, Jeanswaschung und Schuhnähte. Trotzdem kann die KI Details verändern.
@@ -108,7 +108,7 @@ Beide Varianten liefern ein Bild ohne Hintergrund. Das Original bleibt auswählb
 Es gibt kein Cloudflare-Kontingent und keinen automatischen Cloud-Fallback für lokale Jobs.
 
 1. **Mac (macOS 14 oder neuer):** „Remote Login“ (Entfernte Anmeldung) aktivieren.
-   Der SSH-Benutzer braucht Zugriff auf Flux2CLI und die Klein-4B-Modelle in seinem
+   Der SSH-Benutzer braucht Zugriff auf Flux2CLI und die Klein-9B-Modelle in seinem
    Benutzerkonto. Den Vision-Helfer kompilieren (Xcode Command Line Tools) und beide
    Helfer auf dem Mac installieren:
    ```bash
@@ -117,6 +117,8 @@ Es gibt kein Cloudflare-Kontingent und keinen automatischen Cloud-Fallback für 
    chmod 700 "$HOME/.local/libexec/garderobe-studio-cutout"
    install -m 700 scripts/garderobe-flux.sh "$HOME/.local/libexec/garderobe-flux"
    ```
+   Klein 9B benötigt eine einmalige Hugging-Face-Modellfreigabe und einen lokalen
+   Download vor dem ersten Render. Der Textencoder wird separat geladen.
    Standardpfad ist `/Applications/Flux2CLI`. Bei Bedarf kann das erzwungene SSH-Kommando
    `FLUX2CLI_PATH` auf einen anderen absoluten Pfad setzen. Falls eine Einzeldatei-Installation
    mit „Failed to load the default metallib“ abbricht, braucht sie die passende
@@ -145,7 +147,7 @@ Es gibt kein Cloudflare-Kontingent und keinen automatischen Cloud-Fallback für 
    FLUX_SSH_KNOWN_HOSTS=/run/flux-ssh/known_hosts
    ```
    Bei einem Betrieb ohne Docker muss der OpenSSH-Client (`ssh`) im `PATH` liegen.
-4. **App:** Unter **Einstellungen → KI → Studio-Bild** den Anbieter **FLUX.2 Klein 4B
+4. **App:** Unter **Einstellungen → KI → Studio-Bild** den Anbieter **FLUX.2 Klein 9B
    (Mac per SSH)** wählen und speichern. Dann in einem Teil **Original freistellen** drücken.
    Aktiviere **Automatisch für alle Teile** nur, wenn auch bestehende Teile ohne
    Studio-Bild und neue Uploads automatisch verarbeitet werden sollen. Der Mac

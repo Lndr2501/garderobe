@@ -144,7 +144,7 @@ export function tryOnPromptEn(itemNames: string[]): string {
 	return `Photorealistic virtual try-on. Show the person from image 1 wearing the clothing from the other reference images (${itemNames.join(", ")}). Keep the face, hair, body shape, pose, lighting and background of image 1 exactly. Reproduce cut, color, pattern, logos and material of each garment faithfully. Full body view, natural folds, no extra people, no text.`;
 }
 
-/** Compact reference prompts for the local Klein model, based on the successful studio trials. */
+/** Reference prompts for the local Klein model, based on the studio trials. */
 const STUDIO_COLORS = new Map([
 	["navy", "dark navy blue"], ["schwarz", "black"], ["anthrazit", "charcoal grey"],
 	["grau", "grey"], ["hellblau", "light blue"], ["denim", "denim blue"], ["blau", "blue"],
@@ -158,7 +158,7 @@ export function localStudioPrompt(category: string, kind: string, name: string, 
 	const mannequin = "front view, natural 3D volume as if worn by an invisible mannequin";
 	const shot = "Professional e-commerce product photo of";
 	const noNewMarks = "Do not add any logo, badge or text.";
-	// Give the smaller model verified palette hints instead of asking it to infer dark hues.
+	// Use known palette labels as hints, while keeping the reference authoritative.
 	const colors = colorKeys.slice(0, 3).map((key) => STUDIO_COLORS.get(key)).filter(Boolean);
 	const palette = colors.length ? ` Keep the original ${colors.join(" and ")} tones, without changing their placement.` : "";
 	if (category === "shoes") {
@@ -175,10 +175,16 @@ export function localStudioPrompt(category: string, kind: string, name: string, 
 	}
 	const halfZip = /(?:half|quarter)[ -]?zip|troyer|(?:1\s*\/\s*[24])[- ]?zip/.test(hint);
 	const sweater = /pulli|pullover|sweater|strick/.test(hint);
-	const features = halfZip ? "color, texture, zipper, collar and all details" : sweater
-		? "color, knit texture, neckline and any small embroidered logo"
-		: "color, fabric texture, cut, seams, fastenings and existing logos";
-	return `${shot} ${sweater && !halfZip ? "this exact sweater" : "this exact garment"}, ${mannequin}, ${light}. Keep ${features} identical.${palette} No visible mannequin, body or hanger. ${noNewMarks}`;
+	const tShirt = /t[ -]?shirt|tee/.test(hint);
+	const cable = /zopf|cable/.test(hint);
+	const type = halfZip ? "half-zip top" : sweater ? (cable ? "cable-knit sweater" : "sweater") : tShirt ? "T-shirt" : "garment";
+	const preserve = halfZip ? "Copy the original collar, zipper length, zipper pull, fabric texture and trim."
+		: sweater
+			? (cable ? "Copy the original narrow vertical cable columns and fine matte knit, keeping their spacing and scale. Preserve the neckline, ribbed cuffs and hem."
+				: "Copy the knit pattern, spacing and scale. Preserve the original neckline, ribbed cuffs and hem.")
+			: "Copy the original fabric texture, neckline, seams, sleeve length and hem.";
+	const sleeves = tShirt ? "Keep the original angle and opening of the short sleeves." : "Keep the original sleeve shape; let long sleeves hang relaxed and straight.";
+	return `${shot} this exact ${type}, straight front view, on an invisible straight-sided garment form. Keep the original fit and side seams. The front panel hangs flat and even from neckline to hem, with no contouring, pinching or crosswise folds. Slight depth only at the shoulder seams and neckline. ${sleeves} ${preserve} Keep any existing embroidery, logo and visible collar label at their original size and position.${palette} Soft broad frontal fill plus a very gentle upper-left side light to reveal the fabric without changing its color. No glossy highlights or strong shading across the front. Show the complete garment, centered against a pale grey studio backdrop. No visible body, mannequin or hanger. ${noNewMarks}`;
 }
 
 /** Studio prompt for external providers. */

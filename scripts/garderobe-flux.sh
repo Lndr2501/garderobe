@@ -1,5 +1,5 @@
 #!/bin/bash
-# Forced SSH command. Stdin: "<width> <height> <ext> [studio|cutout]\n<prompt>\n<image bytes>".
+# Forced SSH command. Stdin: "<width> <height> <ext> [studio|studio-9b|cutout]\n<prompt>\n<image bytes>".
 # v2 stdout: "GARDEROBE/2 <full length>\n", then full PNG and thumbnail PNG.
 # Legacy requests without a mode still receive a single unprocessed PNG.
 set -euo pipefail
@@ -16,7 +16,7 @@ cutout=${GARDE_CUTOUT_PATH:-"$HOME/.local/libexec/garderobe-studio-cutout"}
 IFS=' ' read -r width height ext mode
 IFS= read -r prompt
 case "$mode:$width:$height" in
-	:768:1024|:1024:768|studio:768:1024|studio:1024:768)
+	:768:1024|:1024:768|studio:768:1024|studio:1024:768|studio-9b:768:1024|studio-9b:1024:768)
 		[[ -x "$cli" ]] || exit 69
 		[[ ${#prompt} -le 2000 && "$prompt" == 'Professional e-commerce product photo '* ]] || exit 65 ;;
 	cutout:0:0) [[ -z "$prompt" ]] || exit 65 ;;
@@ -61,8 +61,15 @@ run() {
 render="$input"
 if [[ "$mode" != cutout ]]; then
 	render="$dir/output.png"
-	# Klein 4B uses its default four steps. Do not inherit Cloudflare's step count.
-	run 70 "$cli" i2i --model klein-4b --width "$width" --height "$height" --output "$render" "$prompt" --images "$input"
+	# Keep older servers on 4B, and use the tested 9B preset for the new request.
+	model=klein-4b
+	extra=()
+	if [[ "$mode" == studio-9b ]]; then
+		model=klein-9b
+		extra=(--transformer-quant int4 --text-quant 4bit --memory-profile conservative --steps 4 --guidance 1.0 --seed 42)
+	fi
+	# Bash 3 set -u needs the conditional form when extra is empty.
+	run 70 "$cli" i2i --model "$model" --width "$width" --height "$height" --output "$render" "$prompt" --images "$input" ${extra[@]+"${extra[@]}"}
 fi
 if [[ -z "$mode" ]]; then
 	/bin/cat "$render"
