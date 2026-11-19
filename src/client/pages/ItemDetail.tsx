@@ -112,7 +112,7 @@ export function ItemDetail() {
 	const makeStudio = async (mode: StudioMode = localStudio ? "original" : "render") => {
 		setBusy("Studio-Bild wird vorbereitet …");
 		try {
-			putItem(await startStudio(item, mode));
+			putItem(await startStudio(item, mode, localStudio));
 			toast(mode === "original" ? "Originalfoto wird freigestellt" : "Studio-Bild zur Warteschlange hinzugefügt", "ok");
 		} catch (e) {
 			toast(errorText(e), "error");

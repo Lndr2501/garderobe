@@ -2,10 +2,11 @@
 // finishing step (background removal runs in the browser, the server can't decode images).
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
+import { studioReferenceEdge } from "../../shared/studio.ts";
 import { LOCAL_FLUX_PROVIDER, type Item, type StudioMode } from "../../shared/types.ts";
 import { api, imgUrl, uploadImage } from "../api.ts";
 import { keys, useItems, useSettings } from "../queries.ts";
-import { aiJpeg, loadCanvas, processImage } from "./image.ts";
+import { aiJpeg, loadCanvas, processImage, studioReferenceJpeg } from "./image.ts";
 
 /** Front picture to show: the studio picture unless the user prefers the own photo. */
 export function frontKey(item: Item, size: "thumb" | "full" = "thumb"): string | null {
@@ -44,14 +45,16 @@ export function studioStatusText(item: Item): string {
 }
 
 /** Original mode uses the exact stored photo. Only the optional redraw needs a helper upload. */
-export async function startStudio(item: Item, mode: StudioMode): Promise<Item> {
+export async function startStudio(item: Item, mode: StudioMode, local = false): Promise<Item> {
 	const key = item.imageFront ?? item.thumbFront;
 	if (!key) throw new Error("Kein Foto vorhanden");
 	const path = `/api/items/${item.id}/studio`;
 	if (mode === "original") return api<Item>(path, { method: "POST", body: { mode } });
 	const canvas = await loadCanvas(imgUrl(key)!, 1600);
-	// ≤768 px keeps the reference at two 512² tiles (cheaper) and is plenty for the model.
-	const image = await uploadImage(await aiJpeg(canvas, 768));
+	const reference = local
+		? await studioReferenceJpeg(canvas, studioReferenceEdge(item.category, item.subcategory, item.name))
+		: await aiJpeg(canvas, 768); // Keep the remote provider's two-tile reference budget.
+	const image = await uploadImage(reference);
 	return api<Item>(path, { method: "POST", body: { image, mode } });
 }
 
@@ -70,7 +73,8 @@ export function useStudioWork(): void {
 	const put = (saved: Item) => qc.setQueryData<Item[]>(keys.items, (old) => old?.map((x) => (x.id === saved.id ? saved : x)));
 	const quality = settings?.bgRemoval.quality ?? "best";
 	const auto = !!settings?.ai.studio.auto && !!settings?.ai.areas.studio;
-	const mode = settings?.ai.routes.studio.provider === LOCAL_FLUX_PROVIDER ? "original" : "render";
+	const local = settings?.ai.routes.studio.provider === LOCAL_FLUX_PROVIDER;
+	const mode = local ? "original" : "render";
 
 	useEffect(() => {
 		const todo = (items ?? []).filter((i) => i.studioState === "raw" && i.studioRaw && !finishing.has(i.id));
@@ -112,11 +116,11 @@ export function useStudioWork(): void {
 		void (async () => {
 			for (const item of todo) {
 				try {
-					put(await startStudio(item, mode));
+					put(await startStudio(item, mode, local));
 				} catch (err) {
 					console.warn("studio start failed", item.id, err);
 				}
 			}
 		})();
-	}, [items, auto, mode]);
+	}, [items, auto, mode, local]);
 }

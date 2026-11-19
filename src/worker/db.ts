@@ -144,7 +144,7 @@ export function newId(): string {
 	return crypto.randomUUID();
 }
 
-function parseJson<T>(value: unknown, fallback: T): T {
+export function parseJson<T>(value: unknown, fallback: T): T {
 	if (typeof value !== "string" || value === "") return fallback;
 	try {
 		return JSON.parse(value) as T;

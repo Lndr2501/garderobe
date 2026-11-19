@@ -177,6 +177,21 @@ export async function aiJpeg(c: HTMLCanvasElement, maxDim = 1024): Promise<Blob>
 	return blob;
 }
 
+/** Studio i2i reference: centered on white, with 4% margin per edge and no enlargement. */
+export async function studioReferenceJpeg(source: HTMLCanvasElement, edge: 512 | 1024): Promise<Blob> {
+	const photo = hasTransparency(source) ? trimTransparent(source, 0) : source;
+	const scaled = toCanvas(photo, edge - Math.floor(edge * 0.08));
+	const square = document.createElement("canvas");
+	square.width = square.height = edge;
+	const ctx = square.getContext("2d")!;
+	ctx.fillStyle = "#fff";
+	ctx.fillRect(0, 0, edge, edge);
+	ctx.drawImage(scaled, Math.floor((edge - scaled.width) / 2), Math.floor((edge - scaled.height) / 2));
+	const jpeg = await canvasBlob(square, "image/jpeg", 0.92);
+	if (!jpeg) throw new Error("Studio-Vorlage konnte nicht erstellt werden");
+	return jpeg;
+}
+
 /** Returns a new canvas turned clockwise by 0/90/180/270 degrees. */
 export function rotateCanvas(c: HTMLCanvasElement, deg: number): HTMLCanvasElement {
 	const d = ((deg % 360) + 360) % 360;

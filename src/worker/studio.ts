@@ -4,11 +4,11 @@
 import { LOCAL_FLUX_PROVIDER } from "../shared/types.ts";
 import { AiError, aiConfigured, generateImage } from "./ai.ts";
 import { configFor, exhaustUsage, loadAiStore, msUntilNextUtcDay, releaseUsage, reserveUsage } from "./aisettings.ts";
-import { now } from "./db.ts";
+import { now, parseJson } from "./db.ts";
 import { deleteImages, getImageBytes, newImageKey, putImage, type ImageEnv } from "./images.ts";
 import { NonRetryableError, type JobQueue, type Step } from "./jobs.ts";
 import type { Db } from "./platform.ts";
-import { studioPrompt } from "./prompts.ts";
+import { localStudioPrompt, studioPrompt } from "./prompts.ts";
 
 export interface StudioParams {
 	itemId: string;
@@ -133,11 +133,12 @@ export async function runLocalStudioJob(env: StudioEnv, { itemId, jobId, input, 
 			const img = await getImageBytes(env, input);
 			if (!img) throw new NonRetryableError("Ausgangsbild fehlt.");
 			if (!env.FLUX_STUDIO) throw new NonRetryableError("Der lokale FLUX-Anbieter ist nicht eingerichtet.");
-			const item = await db.prepare(`SELECT category, subcategory FROM items WHERE id = ?`)
-				.bind(itemId).first<{ category: string; subcategory: string }>();
+			const item = await db.prepare(`SELECT category, subcategory, name, colors FROM items WHERE id = ?`)
+				.bind(itemId).first<{ category: string; subcategory: string; name: string; colors: string }>();
+			const colors = parseJson<string[]>(item?.colors, []);
 			const rendered = repair || original
 				? await env.FLUX_STUDIO.cutout(img)
-				: await env.FLUX_STUDIO.generate(studioPrompt(item?.category ?? "", item?.subcategory ?? "", true), img, studioSize(item?.category ?? ""));
+				: await env.FLUX_STUDIO.generate(localStudioPrompt(item?.category ?? "", item?.subcategory ?? "", item?.name ?? "", Array.isArray(colors) ? colors : []), img, studioSize(item?.category ?? ""));
 			const full = newImageKey("image/png", "studio");
 			const thumb = newImageKey("image/png", "studio");
 			await Promise.all([putImage(env, full, rendered.full, "image/png"), putImage(env, thumb, rendered.thumb, "image/png")]);

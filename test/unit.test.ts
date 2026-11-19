@@ -4,6 +4,25 @@ import type { Item } from "../src/shared/types.ts";
 import { chatText, extractJson, normalizeBaseUrl, ThinkFilter, type AiConfig } from "../src/worker/ai.ts";
 import { applyAiPatch, configFor, emptyStore, migrateLegacy, msUntilNextUtcDay } from "../src/worker/aisettings.ts";
 import { fluxNeurons, imageDims } from "../src/worker/studio.ts";
+import { localStudioPrompt } from "../src/worker/prompts.ts";
+import { studioReferenceEdge } from "../src/shared/studio.ts";
+
+describe("local Studio render references", () => {
+	it("selects the proven reference sizes by garment type", () => {
+		expect(studioReferenceEdge("top", "Half-Zip")).toBe(512);
+		expect(studioReferenceEdge("shoes", "Sneaker")).toBe(512);
+		expect(studioReferenceEdge("bottom", "Jeans")).toBe(1024);
+		expect(studioReferenceEdge("shoes", "Hausschuh")).toBe(1024);
+	});
+	it("preserves category-specific details without inventing product facts", () => {
+		expect(localStudioPrompt("top", "", "Strick Half-Zip")).toContain("zipper");
+		expect(localStudioPrompt("bottom", "", "Jeans")).toMatch(/Remove the clothes hanger.*wash and fading/);
+		expect(localStudioPrompt("shoes", "", "Hausschuh")).toMatch(/exact slipper.*three-quarter side view.*number of shoes.*Do not add any logo/);
+		expect(localStudioPrompt("shoes", "", "Sneaker")).not.toContain("pair of shoes");
+		expect(localStudioPrompt("top", "", "Strickpullover", ["navy"])).toContain("dark navy blue");
+		expect(localStudioPrompt("top", "", "Strickpullover", ["unknown"])).not.toContain("unknown");
+	});
+});
 
 const EMPTY_AI: AiConfig = {
 	providerId: "",

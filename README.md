@@ -100,7 +100,10 @@ Bei **Original freistellen** schickt der App-Server das gespeicherte Foto per SS
 an den Mac. Dort bestimmt macOS Vision den Vordergrund; Muster, Farbe und Logos
 werden nicht neu gezeichnet. Hat das Original bereits einen transparenten Hintergrund,
 wird seine Maske wiederverwendet. Mit **KI-3D-Variante** lässt sich separat
-`Flux2CLI i2i --model klein-4b` starten. Dabei kann die KI Details verändern.
+`Flux2CLI i2i --model klein-4b` starten. Die App legt dafür die Referenz auf ein
+weißes Quadrat mit ca. 4 % Rand pro Seite: 512 × 512 für Oberteile und Sneaker,
+1024 × 1024 für Hosen und Hausschuhe. Die Prompts berücksichtigen u. a. Strick,
+Reißverschluss, Jeanswaschung und Schuhnähte. Trotzdem kann die KI Details verändern.
 Beide Varianten liefern ein Bild ohne Hintergrund. Das Original bleibt auswählbar.
 Es gibt kein Cloudflare-Kontingent und keinen automatischen Cloud-Fallback für lokale Jobs.
 

@@ -144,15 +144,48 @@ export function tryOnPromptEn(itemNames: string[]): string {
 	return `Photorealistic virtual try-on. Show the person from image 1 wearing the clothing from the other reference images (${itemNames.join(", ")}). Keep the face, hair, body shape, pose, lighting and background of image 1 exactly. Reproduce cut, color, pattern, logos and material of each garment faithfully. Full body view, natural folds, no extra people, no text.`;
 }
 
-/** Studio picture from the user's photo (FLUX.2 reference edit). English works best for these models. */
-export function studioPrompt(category: string, kind: string, forCutout = false): string {
+/** Compact reference prompts for the local Klein model, based on the successful studio trials. */
+const STUDIO_COLORS = new Map([
+	["navy", "dark navy blue"], ["schwarz", "black"], ["anthrazit", "charcoal grey"],
+	["grau", "grey"], ["hellblau", "light blue"], ["denim", "denim blue"], ["blau", "blue"],
+	["creme", "cream"], ["weiss", "white"], ["beige", "beige"], ["braun", "brown"],
+	["bordeaux", "burgundy"], ["rot", "red"], ["oliv", "olive green"], ["gruen", "green"],
+]);
+
+export function localStudioPrompt(category: string, kind: string, name: string, colorKeys: string[] = []): string {
+	const hint = `${kind} ${name}`.toLowerCase();
+	const light = "soft studio light, soft contact shadow, light grey background";
+	const mannequin = "front view, natural 3D volume as if worn by an invisible mannequin";
+	const shot = "Professional e-commerce product photo of";
+	const noNewMarks = "Do not add any logo, badge or text.";
+	// Give the smaller model verified palette hints instead of asking it to infer dark hues.
+	const colors = colorKeys.slice(0, 3).map((key) => STUDIO_COLORS.get(key)).filter(Boolean);
+	const palette = colors.length ? ` Keep the original ${colors.join(" and ")} tones, without changing their placement.` : "";
+	if (category === "shoes") {
+		const slipper = /hausschuh|pantoffel|slipper|clog/.test(hint);
+		return `${shot} ${slipper ? "this exact slipper" : "the exact footwear shown"}, three-quarter side view, ${light}. Keep the number of shoes, exact shape, colors, materials, stitching, sole and any existing marks identical.${palette} ${noNewMarks}`;
+	}
+	if (category === "bottom") {
+		const jeans = /jeans|denim/.test(hint);
+		return `${shot} ${jeans ? "these exact jeans" : "this exact garment"}, ${mannequin}, ${light}. Remove the clothes hanger. Keep the exact cut, color, seams and ${jeans ? "wash and fading" : "fabric texture and finish"} identical.${palette} ${noNewMarks}`;
+	}
+	if (category === "socks") return `${shot} the exact socks shown, side view with natural volume on invisible feet, ${light}. Preserve the number of socks, color, knit pattern and any existing embroidery. No visible feet or legs. ${noNewMarks}`;
+	if (category === "bag" || category === "accessory" || category === "other") {
+		return `${shot} this exact product, front view, ${light}. Preserve shape, color, materials, stitching and existing logos. ${noNewMarks}`;
+	}
+	const halfZip = /(?:half|quarter)[ -]?zip|troyer|(?:1\s*\/\s*[24])[- ]?zip/.test(hint);
+	const sweater = /pulli|pullover|sweater|strick/.test(hint);
+	const features = halfZip ? "color, texture, zipper, collar and all details" : sweater
+		? "color, knit texture, neckline and any small embroidered logo"
+		: "color, fabric texture, cut, seams, fastenings and existing logos";
+	return `${shot} ${sweater && !halfZip ? "this exact sweater" : "this exact garment"}, ${mannequin}, ${light}. Keep ${features} identical.${palette} No visible mannequin, body or hanger. ${noNewMarks}`;
+}
+
+/** Studio prompt for external providers. */
+export function studioPrompt(category: string, kind: string): string {
 	const what = kind ? ` (${kind})` : "";
-	const lighting = forCutout
-		? "soft diffused studio lighting with subtle, realistic shading on the product itself; clean, uniform light grey backdrop with no floor, horizon or cast shadow; keep the entire product in frame with room around it"
-		: "soft diffused studio lighting, subtle soft contact shadow, clean light grey seamless background";
-	const keep = forCutout
-		? "Preserve the exact original color, fabric or knit texture, pattern, neckline and cut, seams, buttons and zipper. Keep any existing print, embroidery or small logo exactly as shown, with the same color, size and placement. Do not add, replace or recolor any details. Photorealistic, high-end fashion e-commerce photography."
-		: "Keep every detail identical to the reference: exact color, fabric texture, pattern, logo, print, buttons, zipper, seams, wash and fading. Do not add or invent logos, text or decorations.";
+	const lighting = "soft diffused studio lighting, subtle soft contact shadow, clean light grey seamless background";
+	const keep = "Keep every detail identical to the reference: exact color, fabric texture, pattern, logo, print, buttons, zipper, seams, wash and fading. Do not add or invent logos, text or decorations.";
 	if (category === "shoes") {
 		return `Professional e-commerce product photo of the exact same pair of shoes${what} as in the reference image, three-quarter side view of the pair, centered, ${lighting}. ${keep} No person, no feet, no text.`;
 	}
@@ -161,12 +194,6 @@ export function studioPrompt(category: string, kind: string, forCutout = false):
 	}
 	if (category === "bag" || category === "accessory" || category === "other") {
 		return `Professional e-commerce product photo of the exact same item${what} as in the reference image, front view, standing upright with natural volume, centered, ${lighting}. ${keep} No person, no text.`;
-	}
-	if (forCutout) {
-		const volume = category === "bottom"
-			? "natural volume through the waist and hips, with the original drape and the full hem or both legs visible"
-			: "a naturally filled chest, rounded shoulders and gently shaped sleeves where present, while keeping the original fit and drape";
-		return `Professional e-commerce product photo of this exact garment${what} from the reference image. Straight front view, centered, with natural, realistic 3D volume as if worn by an invisible mannequin: ${volume}. The garment should look naturally worn, not laid flat or inflated. No visible mannequin, body, neck insert or hanger. Use ${lighting}. ${keep}`;
 	}
 	const shape = category === "bottom" ? "with both legs fully visible" : "with natural shoulders and sleeves";
 	return `Professional e-commerce product photo of the exact same garment${what} as in the reference image, shown on an invisible ghost mannequin so it has natural three-dimensional volume, ${shape}, front view, centered, ${lighting}. ${keep} No person, no hanger, no visible mannequin parts or neck stump, no text.`;

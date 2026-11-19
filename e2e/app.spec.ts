@@ -281,6 +281,38 @@ test("studio: rail keeps the original until the transparent cutout is ready", as
 	await page.locator(".rack").screenshot({ path: `${SHOTS}/${info.project.name}-studio-cutout.png`, animations: "disabled" });
 });
 
+test("local 3D sends a centered white square as a JPEG reference", async ({ page }) => {
+	await login(page);
+	const png = await sharp({ create: { width: 700, height: 350, channels: 4, background: "#243a56ff" } }).png().toBuffer();
+	const front = await page.request.post("/api/images", { multipart: { file: { name: "test.png", mimeType: "image/png", buffer: png } } });
+	const created = await page.request.post("/api/items", { data: { name: "Vorlagen-Test", category: "top", imageFront: (await front.json()).key } });
+	const item = await created.json();
+	await page.route("**/api/settings", async (route) => {
+		const response = await route.fetch();
+		const settings = await response.json();
+		settings.ai.routes.studio.provider = "local-flux";
+		settings.ai.areas.studio = true;
+		await route.fulfill({ response, json: settings });
+	});
+	let jpeg: Buffer | undefined;
+	await page.route("**/api/images", async (route) => {
+		const req = route.request();
+		const form = await new Request(req.url(), { method: "POST", headers: { "Content-Type": req.headers()["content-type"]! }, body: new Uint8Array(req.postDataBuffer()!) }).formData();
+		const file = form.get("file") as File;
+		jpeg = Buffer.from(await file.arrayBuffer());
+		await route.fulfill({ json: { key: (await front.json()).key } });
+	});
+	await page.route(`**/api/items/${item.id}/studio`, (route) => route.fulfill({ json: { ...item, studioState: "queued" } }));
+	await page.goto(`/teil/${item.id}`);
+	await page.getByRole("button", { name: "KI-3D-Variante" }).click();
+	await expect(page.getByRole("status").filter({ hasText: "Studio-Bild ist in der Warteschlange" })).toBeVisible();
+	const image = sharp(jpeg!);
+	expect(await image.metadata()).toMatchObject({ format: "jpeg", width: 512, height: 512 });
+	const pixels = await image.removeAlpha().raw().toBuffer();
+	expect([...pixels.subarray(0, 3)]).toEqual([255, 255, 255]);
+	expect(pixels[(256 * 512 + 256) * 3]).toBeLessThan(80);
+});
+
 test("pwa: manifest, icons and service worker files are served", async ({ request }) => {
 	const m = await request.get("/manifest.webmanifest");
 	expect(m.ok()).toBe(true);
