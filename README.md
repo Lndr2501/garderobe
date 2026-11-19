@@ -104,7 +104,9 @@ wird seine Maske wiederverwendet. Mit **KI-3D-Variante** lässt sich separat
 weißes Quadrat mit ca. 4 % Rand pro Seite: 512 × 512 für Oberteile und Sneaker,
 1024 × 1024 für Hosen und Hausschuhe. Die Prompts berücksichtigen u. a. Strick,
 Reißverschluss, Jeanswaschung und Schuhnähte. Trotzdem kann die KI Details verändern.
-Beide Varianten liefern ein Bild ohne Hintergrund. Das Original bleibt auswählbar.
+Beide Varianten liefern ein Bild ohne Hintergrund. Bei dunklen KI-Rendern entfernt
+der Mac zusätzlich helle Hintergrundreste an der Freistellkante; das Original
+bleibt dabei unverändert und auswählbar.
 Es gibt kein Cloudflare-Kontingent und keinen automatischen Cloud-Fallback für lokale Jobs.
 
 1. **Mac (macOS 14 oder neuer):** „Remote Login“ (Entfernte Anmeldung) aktivieren.

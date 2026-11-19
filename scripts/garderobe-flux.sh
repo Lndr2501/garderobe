@@ -74,7 +74,11 @@ fi
 if [[ -z "$mode" ]]; then
 	/bin/cat "$render"
 else
-	run 74 "$cutout" "$render" "$dir/full.png" "$dir/thumb.png"
+	if [[ "$mode" == cutout ]]; then
+		run 74 "$cutout" "$render" "$dir/full.png" "$dir/thumb.png"
+	else
+		run 74 "$cutout" "$render" "$dir/full.png" "$dir/thumb.png" --clean-edge
+	fi
 	printf 'GARDEROBE/2 %d\n' "$(/usr/bin/wc -c < "$dir/full.png")"
 	/bin/cat "$dir/full.png" "$dir/thumb.png"
 fi

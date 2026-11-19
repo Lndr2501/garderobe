@@ -38,6 +38,7 @@ echo "CLI progress; must not be mixed with PNG on stdout"
 `, { mode: 0o700 });
 		await writeFile(join(dir, "cutout"), `#!/bin/bash
 set -eu
+[[ "${"$"}{4:-}" == "${"$"}{FLUX_TEST_CLEAN_EDGE:-}" ]]
 cp "$1" "$2"
 cp "$1" "$3"
 `, { mode: 0o700 });
@@ -49,7 +50,9 @@ cp "$1" "$3"
 		expect(createFluxStudio({})).toBeUndefined();
 		expect(() => createFluxStudio({ ...vars, FLUX_SSH_HOST: "-option" })).toThrow();
 		const studio = createFluxStudio(vars)!;
+		vi.stubEnv("FLUX_TEST_CLEAN_EDGE", "--clean-edge");
 		expect(await studio.generate(prompt, { data: input, type: "image/png" }, { width: 1024, height: 768 })).toEqual({ full: png, thumb: png });
+		vi.stubEnv("FLUX_TEST_CLEAN_EDGE", "");
 		vi.stubEnv("FLUX2CLI_PATH", join(dir, "missing"));
 		expect(await studio.cutout({ data: input, type: "image/webp" })).toEqual({ full: png, thumb: png });
 		const args = await readFile(join(dir, "ssh_args"), "utf8");
