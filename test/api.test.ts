@@ -4,7 +4,7 @@ import { SqliteDb } from "../src/server/sqlite.ts";
 import app, { type Bindings } from "../src/worker/index.ts";
 import { JobRunner } from "../src/worker/jobs.ts";
 import { repairLegacyStudio, runLocalStudioJob, runStudioJob, type StudioCutout, type StudioParams } from "../src/worker/studio.ts";
-import { applyTags, type TagParams } from "../src/worker/tagging.ts";
+import { applyTags, parseRecognition, type TagParams } from "../src/worker/tagging.ts";
 import type { AppSettings, Item, ShoppingCheckResult, Stats, Trip, WearDay } from "../src/shared/types.ts";
 
 const BASE = "https://garderobe.test";
@@ -608,6 +608,21 @@ describe("server-side recognition", () => {
 		const again = await c.json<Item>(`/api/items/${item.id}/retag`, { body: { aiImage: await upload(c), unlock: true } });
 		expect(again.aiState).toBe("pending");
 		expect((await c.req(`/api/items/${item.id}/retag`, { body: {} })).status).toBe(400);
+	});
+
+	it("keeps ambiguous photos for review without applying guessed tags", async () => {
+		const c = await loggedIn();
+		const item = await c.json<Item>("/api/items", { body: { name: "Mein Foto" } });
+		const result = parseRecognition({ subject: "multiple", name: "Erfundener Pulli", category: "top", anker: "links" });
+		await applyTags(env.DB, item.id, result);
+		expect(await c.json<Item>(`/api/items/${item.id}`)).toMatchObject({ name: "Mein Foto", needsReview: true, rotate: 0 });
+	});
+
+	it("keeps wardrobe tags and does not infer waterproofing from unknown", () => {
+		const result = parseRecognition({ subject: "single", category: "shoes", subcategory: "Slides", name: "Schwarze Slides", styleTags: ["casual", "xx"], waterproof: null, anker: "rechts" });
+		expect(result).toMatchObject({ tags: { subcategory: "Slides", styleTags: ["casual"] }, needsReview: false, rotate: 90 });
+		expect(result.tags.waterproof).toBeUndefined();
+		expect(parseRecognition({ category: "other" }).needsReview).toBe(true);
 	});
 
 	it("AI results never overwrite fields the user set by hand", async () => {

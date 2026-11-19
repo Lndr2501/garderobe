@@ -130,8 +130,25 @@ export interface SuggestOptions {
 	today?: Date;
 }
 
+/** Shared candidate pool for the stylist and the offline selector. */
+export function outfitCandidates(items: Item[], weather: WeatherInput, occasion = ""): Item[] {
+	const indoor = /^(?:zuhause|zu hause|daheim|indoor)$/i.test(occasion.trim());
+	const coldOrWet = weather.feelsLike <= 10 || (weather.precipProb ?? 0) >= 50;
+	return items.filter((it) => {
+		if (it.status !== "active") return false;
+		if (indoor || !coldOrWet || it.category !== "shoes") return true;
+		return !/(?:slides?\b|sandale|sandal|flip[ -]?flop|badelatsch|badeschlapp|badeschuh|zehentrenner|hausschuh|pantolette|adilette|birkenstock arizona)/i.test(it.name + " " + it.subcategory);
+	});
+}
+
+function pairingScore(chosen: Item[], candidate: Item): number {
+	const sharedStyle = candidate.styleTags.some((tag) => chosen.some((it) => it.styleTags.includes(tag)));
+	const gap = Math.abs(candidate.formality - chosen[0]!.formality);
+	return colorHarmony([...chosen, candidate]) + (sharedStyle ? 0.7 : 0) - Math.max(0, gap - 1) * 0.55;
+}
+
 export function suggestOutfits(allItems: Item[], opts: SuggestOptions): OutfitSuggestion[] {
-	const items = allItems.filter((i) => i.status === "active");
+	const items = outfitCandidates(allItems, opts.weather, opts.occasion);
 	const today = opts.today ?? new Date();
 	const ctx: ScoreCtx = {
 		warmth: targetWarmth(opts.weather.feelsLike),
@@ -159,37 +176,38 @@ export function suggestOutfits(allItems: Item[], opts: SuggestOptions): OutfitSu
 		const chosen: Item[] = [];
 		const useDress = dresses.length > 0 && (tops.length === 0 || bottoms.length === 0 || rnd() < 0.25);
 		if (useDress) {
-			const d = pickWeighted(dresses, rnd, usedMain);
+			const d = pickWeighted(dresses, rnd, usedMain) ?? pickWeighted(dresses, rnd, new Set());
 			if (!d) continue;
 			chosen.push(d);
 		} else {
-			const t = pickWeighted(tops, rnd, usedMain);
-			if (!t) break;
+			const t = pickWeighted(tops, rnd, usedMain) ?? pickWeighted(tops, rnd, new Set());
+			if (!t) continue;
 			chosen.push(t);
 			const b = pickWeighted(
-				bottoms.map((c) => ({ v: c.v, s: c.s + colorHarmony([t, c.v]) })),
+				bottoms.map((c) => ({ v: c.v, s: c.s + pairingScore([t], c.v) })),
 				rnd,
 				new Set(),
 			);
-			if (b) chosen.push(b);
+			if (!b) continue;
+			chosen.push(b);
 		}
 		if (wantOuter) {
 			const o = pickWeighted(
-				outer.map((c) => ({ v: c.v, s: c.s + colorHarmony([...chosen, c.v]) })),
+				outer.map((c) => ({ v: c.v, s: c.s + pairingScore(chosen, c.v) })),
 				rnd,
 				new Set(),
 			);
 			if (o) chosen.push(o);
 		}
 		const sh = pickWeighted(
-			shoes.map((c) => ({ v: c.v, s: c.s + colorHarmony([...chosen, c.v]) * 0.6 })),
+			shoes.map((c) => ({ v: c.v, s: c.s + pairingScore(chosen, c.v) * 0.6 })),
 			rnd,
 			new Set(),
 		);
 		if (sh) chosen.push(sh);
 		if (ctx.warmth >= 5 && accessories.length > 0) {
-			const warmAcc = accessories.filter((a) => a.v.warmth >= 3);
-			const a = pickWeighted(warmAcc.length ? warmAcc : accessories, rnd, new Set());
+			const warmAcc = accessories.filter((a) => a.v.warmth >= 3 && /mütze|beanie|schal|handschuh|stirnband/i.test(a.v.name + " " + a.v.subcategory));
+			const a = pickWeighted(warmAcc, rnd, new Set());
 			if (a) chosen.push(a);
 		}
 		const key = chosen
@@ -201,7 +219,7 @@ export function suggestOutfits(allItems: Item[], opts: SuggestOptions): OutfitSu
 		results.push({
 			name: outfitName(chosen, ctx),
 			itemIds: chosen.map((c) => c.id),
-			reason: outfitReason(opts.weather, ctx, wantOuter),
+			reason: outfitReason(opts.weather, ctx, chosen.some((it) => it.category === "outerwear")),
 			source: "rules",
 		});
 	}

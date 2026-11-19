@@ -2,7 +2,7 @@ import { CATEGORIES, COLORS, PATTERNS, SEASONS, STYLE_TAGS } from "../shared/tax
 import type { Item } from "../shared/types.ts";
 import { daysSince } from "../shared/rules.ts";
 
-export function wardrobeSummary(items: Item[], limit = 400): string {
+export function wardrobeSummary(items: Item[], limit = 400, includeCut = false): string {
 	const active = items.filter((i) => i.status === "active").slice(0, limit);
 	if (active.length === 0) return "(Der Kleiderschrank ist noch leer.)";
 	return active
@@ -13,6 +13,7 @@ export function wardrobeSummary(items: Item[], limit = 400): string {
 				i.id,
 				i.name || "(ohne Name)",
 				i.category,
+				...(includeCut ? [i.subcategory || "-", i.fit || "-", i.material || "-"] : []),
 				i.colors.join("/") || "-",
 				i.pattern || "uni",
 				`wärme ${i.warmth}`,
@@ -40,7 +41,9 @@ export const WARDROBE_FORMAT =
 export function taggingPrompt(): string {
 	return `Du katalogisierst Kleidung für eine digitale Garderobe. Das Foto zeigt EIN Teil, oft flach auf Bett oder Boden fotografiert und dabei gedreht oder auf dem Kopf.
 Antworte NUR mit JSON, ohne Erklärung:
-{"category":"...","subcategory":"...","anker":"...","name":"...","colors":[...],"material":"...","pattern":"...","fit":"...","brand":"","styleTags":[...],"seasons":[...],"warmth":3,"formality":2,"waterproof":false}
+{"category":"...","subcategory":"...","anker":"...","name":"...","colors":[...],"material":"...","pattern":"...","fit":"...","brand":"","styleTags":[...],"seasons":[...],"warmth":3,"formality":2,"waterproof":null,"subject":"single"}
+
+Prüfe zuerst das Motiv: subject="single" für ein erkennbares Hauptteil (auch ein zusammengehöriges Paar Schuhe), "multiple" bei mehreren gleichwertigen Teilen, "unclear" wenn kein Teil sicher erkennbar ist. Bei multiple/unclear nur subject zurückgeben. Hintergrund, Bügel, Schatten und Hände sind keine Kleidungsmerkmale.
 
 category (genau einer):
 - "top" = Oberteil: T-Shirt, Polo, Hemd, Bluse, Pullover, Strickpullover, Half-Zip, Hoodie, Sweatshirt, Top
@@ -61,6 +64,8 @@ anker = auf welcher Bildseite liegt der Anker des Teils: "oben", "unten", "links
 Schau zuerst, wo Kragen, Bund oder Sohle im Bild ist, dann antworte.
 
 subcategory: genauer Typ auf Deutsch (z.B. T-Shirt, Strickpullover, Half-Zip Pullover, Jeans, Sneaker, Hausschuh).
+Bei Schuhen offene Slides, Sandalen, Hausschuhe, geschlossene Sneaker und Boots klar unterscheiden: Zehenbereich, Ferse, Riemen und Sohle beachten. Bei Hosen die Breite von Oberschenkel, Knie und Saum vergleichen: wide-leg, straight und tapered nicht verwechseln. Bei Jacke vs. Weste auf Ärmel achten. Bei Accessoires Uhr, Armband und Gürtel getrennt benennen.
+fit nur bei erkennbarem Schnitt; bei Accessoires leer lassen. material nur visuell belegbar (z.B. Denim oder Strick); keine Faserzusammensetzung raten. waterproof nur bei eindeutigem Nachweis (z.B. lesbare Kennzeichnung); sonst null. Glanz allein ist kein Nachweis.
 name: wie im Laden, max. 4 Wörter, Farbe + Typ, z.B. "Navy Zopfstrick-Pullover", "Helle Wide-Leg Jeans", "Asics Sneaker Creme-Bordeaux".
 colors: Hauptfarbe zuerst, nur aus [${COLORS.map((c) => `"${c.key}"`).join(",")}]. Fotos sind oft zu dunkel: unterscheide schwarz/navy/anthrazit sorgfältig.
 pattern: einer von [${PATTERNS.map((p) => `"${p}"`).join(",")}].
@@ -83,16 +88,18 @@ Wetter: ${weatherText}
 Anlass: ${occasion || "Alltag"}
 Zuletzt getragen (vermeide Wiederholungen): ${recent || "keine Daten"}
 
-Regeln:
-- Nur IDs aus der Liste verwenden.
-- Jedes Outfit: Oberteil + Unterteil ODER Kleid, dazu Schuhe falls vorhanden; Jacke bei Kälte/Regen; Accessoires optional.
-- Wärme an das Wetter anpassen, Farben harmonisch kombinieren, selten getragene Teile bevorzugen.
-- Begründung kurz (max. 20 Wörter), locker, auf Deutsch, Du-Form.
+Auswahl in dieser Reihenfolge:
+1. Wetter und Anlass zuerst. Nutze die gefühlte Temperatur, sonst die Lufttemperatur. Für draußen bei höchstens 10 °C oder bei Regen: geschlossene Schuhe; keine Slides, Sandalen oder offenen Hausschuhe. Fehlt ein geeignetes Paar, lass die Schuhe weg. Bei Kälte eine wärmende Schicht, bei Regen möglichst eine als wasserdicht markierte Jacke. Bei unbekanntem Wetter keine konkreten Bedingungen behaupten.
+2. Ein tragbarer Look besteht aus Oberteil + Unterteil oder einem Kleid, dazu passende Schuhe, soweit vorhanden. Stimme Schnitt und Material aufeinander ab (z. B. genug Platz für Strick unter der Jacke). Verwende nur gelistete IDs, jede höchstens einmal pro Look. Gürtel, Mütze, Uhr oder Schmuck nur, wenn sie zum Look passen; keine Accessoires erfinden oder doppeln.
+3. Variiere möglichst ein Hauptteil zwischen den Looks; ein einziges geeignetes Paar Schuhe darf sich wiederholen. Farbharmonie, Favoriten und selten getragene Teile entscheiden erst zwischen gleich geeigneten Kombinationen.
 
+Prüfe jeden fertigen Look still als Ganzes: Gibt es ein Hauptteil, zu dem Schnitt, Farben und Stil der Begleiter passen? Bleibt bei einem auffälligen Muster der Rest ruhiger? Ist jede Schicht für Wetter und Anlass sinnvoll? Tausche unpassende Teile aus, statt sie in der Begründung schönzureden. Zwei Looks, die sich nur in Accessoires unterscheiden, zählen als eine Variante.
+
+Begründung: max. 20 Wörter auf Deutsch in Du-Form; nenne einen konkreten Grund für die Kombination.
 Antworte NUR mit JSON: {"outfits":[{"name":"kurzer, kreativer Name","itemIds":["…"],"reason":"…"}]}
 
-Kleiderschrank (${WARDROBE_FORMAT}):
-${wardrobeSummary(items)}`;
+Kleiderschrank (${WARDROBE_FORMAT.replace("Kategorie |", "Kategorie | Untertyp | Schnitt | Material |")}):
+${wardrobeSummary(items, 400, true)}`;
 }
 
 export function chatSystemPrompt(items: Item[], context: string, name: string): string {

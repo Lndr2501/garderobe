@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import { pairingItems, packingList, similarItems, suggestOutfits, daysSince } from "../shared/rules.ts";
+import { outfitCandidates, pairingItems, packingList, similarItems, suggestOutfits, daysSince } from "../shared/rules.ts";
 import { LOCAL_FLUX_PROVIDER, type AppSettings, type Item, type OutfitSuggestion, type ShoppingCheckResult, type Stats, type TripWeatherDay, type WearDay } from "../shared/types.ts";
 import { CATEGORY_KEYS, COLOR_KEYS } from "../shared/taxonomy.ts";
 import {
@@ -654,8 +654,8 @@ app.post("/api/ai/tag", async (c) => {
 	const b = await body(c);
 	const image = dataUrlFrom(b.image);
 	const ai = await loadAi(c.env.DB, "vision");
-	const { tags, rotate } = await tagImage(ai, image, str(b.colorHint, 40));
-	return c.json({ ...tags, rotate });
+	const { tags, rotate, needsReview } = await tagImage(ai, image, str(b.colorHint, 40));
+	return c.json({ ...tags, rotate, needsReview });
 });
 
 function weatherText(w: Record<string, unknown>): string {
@@ -682,8 +682,9 @@ app.post("/api/ai/suggest", async (c) => {
 	const weather = isObj(b.weather) ? b.weather : {};
 	const feelsLike = typeof weather.feelsLike === "number" ? weather.feelsLike : typeof weather.temp === "number" ? weather.temp : 15;
 	const occasion = str(b.occasion, 120) ?? "";
-	const items = (await listItems(c.env.DB)).filter((i) => i.status === "active");
-	const ids = new Set(items.map((i) => i.id));
+	const conditions = { feelsLike, precipProb: typeof weather.precipProb === "number" ? weather.precipProb : 0 };
+	const items = outfitCandidates(await listItems(c.env.DB), conditions, occasion);
+	const categories = new Map(items.map((i) => [i.id, i.category]));
 	const ai = await loadAi(c.env.DB, "text");
 	let aiError: string | undefined;
 	if (b.useAi !== false && aiConfigured(ai) && items.length >= 2) {
@@ -698,11 +699,14 @@ app.post("/api/ai/suggest", async (c) => {
 			const suggestions: OutfitSuggestion[] = (res.outfits ?? [])
 				.map((o) => ({
 					name: str(o.name, 60) || "Outfit",
-					itemIds: (o.itemIds ?? []).filter((id) => ids.has(id)),
+					itemIds: [...new Set((o.itemIds ?? []).filter((id) => categories.has(id)))],
 					reason: str(o.reason, 200) ?? "",
 					source: "ai" as const,
 				}))
-				.filter((o) => o.itemIds.length >= 1)
+				.filter((o) => {
+					const parts = o.itemIds.map((id) => categories.get(id));
+					return parts.includes("dress") || (parts.includes("top") && parts.includes("bottom"));
+				})
 				.slice(0, 3);
 			if (suggestions.length) return c.json({ suggestions, source: "ai" });
 			aiError = "KI hat keine gültigen Outfits geliefert";
@@ -711,10 +715,7 @@ app.post("/api/ai/suggest", async (c) => {
 		}
 	}
 	const suggestions = suggestOutfits(items, {
-		weather: {
-			feelsLike,
-			precipProb: typeof weather.precipProb === "number" ? weather.precipProb : 0,
-		},
+		weather: conditions,
 		occasion,
 		seed: typeof b.seed === "string" ? b.seed : undefined,
 	});

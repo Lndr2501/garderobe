@@ -1,6 +1,6 @@
 // Server-side garment recognition. Runs as a durable background job so slow AI providers
 // (30–150 s per photo) never lose a result: retries, survives restarts, no dependency on the open app.
-import type { CategoryKey } from "../shared/taxonomy.ts";
+import { STYLE_TAGS, type CategoryKey } from "../shared/taxonomy.ts";
 import type { ItemInput } from "../shared/types.ts";
 import { aiConfigured, chatJson, type AiConfig } from "./ai.ts";
 import { loadAi } from "./aisettings.ts";
@@ -25,6 +25,7 @@ export interface TagEnv extends ImageEnv {
 
 export interface TagResult {
 	tags: ItemInput;
+	needsReview?: boolean;
 	/** Clockwise degrees to turn the photo so the piece is upright. */
 	rotate: number;
 }
@@ -82,9 +83,15 @@ export async function tagImage(ai: AiConfig, imageDataUrl: string, colorHint?: s
 		],
 		{ temperature: 0.1, maxTokens: 900 },
 	);
+	return parseRecognition(raw);
+}
+
+export function parseRecognition(raw: Record<string, unknown>): TagResult {
+	if (raw.subject !== undefined && raw.subject !== "single") return { tags: {}, rotate: 0, needsReview: true };
 	const tags = sanitizeItem(raw);
+	if (tags.styleTags) tags.styleTags = tags.styleTags.filter((tag) => STYLE_TAGS.includes(tag));
 	for (const k of Object.keys(tags)) if (!(AI_FIELDS as readonly string[]).includes(k)) delete tags[k as keyof ItemInput];
-	return { tags, rotate: rotationFor(tags.category, str(raw.anker ?? raw.anchor, 12)) };
+	return { tags, needsReview: !tags.category || tags.category === "other" || !tags.subcategory || !tags.name, rotate: rotationFor(tags.category, str(raw.anker ?? raw.anchor, 12)) };
 }
 
 /** Writes an AI result into the item, skipping fields the user set by hand. */
@@ -110,8 +117,8 @@ export async function applyTags(db: Db, itemId: string, result: TagResult): Prom
 		sets.push("rotate = ?");
 		vals.push(result.rotate);
 	}
-	sets.push("ai_state = 'done'", "ai_error = ''", "ai_image = NULL", "needs_review = 0", "updated_at = ?");
-	vals.push(now(), itemId);
+	sets.push("ai_state = 'done'", "ai_error = ''", "ai_image = NULL", "needs_review = ?", "updated_at = ?");
+	vals.push(result.needsReview ? 1 : 0, now(), itemId);
 	await db.prepare(`UPDATE items SET ${sets.join(", ")} WHERE id = ?`).bind(...vals).run();
 	return true;
 }
@@ -125,7 +132,7 @@ export async function startTagging(env: TagEnv, params: TagParams): Promise<void
 		if (!env.TAGGER) throw new Error("Hintergrund-Erkennung ist hier nicht verfügbar");
 		await env.TAGGER.create({ params });
 	} catch (err) {
-		await env.DB.prepare(`UPDATE items SET ai_state = 'failed', ai_error = ? WHERE id = ?`)
+		await env.DB.prepare(`UPDATE items SET ai_state = 'failed', needs_review = 1, ai_error = ? WHERE id = ?`)
 			.bind(String((err as Error).message).slice(0, 300), params.itemId)
 			.run();
 	}
@@ -155,7 +162,7 @@ export async function runTagJob(env: TagEnv, params: TagParams, step: Step): Pro
 	await step.do("save", async () => {
 		if (result) await applyTags(env.DB, itemId, result);
 		else
-			await env.DB.prepare(`UPDATE items SET ai_state = 'failed', ai_error = ?, ai_image = NULL WHERE id = ?`)
+			await env.DB.prepare(`UPDATE items SET ai_state = 'failed', needs_review = 1, ai_error = ?, ai_image = NULL WHERE id = ?`)
 				.bind(error.slice(0, 300), itemId)
 				.run();
 	});

@@ -4,7 +4,7 @@ import type { Item } from "../src/shared/types.ts";
 import { chatText, extractJson, normalizeBaseUrl, ThinkFilter, type AiConfig } from "../src/worker/ai.ts";
 import { applyAiPatch, configFor, emptyStore, migrateLegacy, msUntilNextUtcDay } from "../src/worker/aisettings.ts";
 import { fluxNeurons, imageDims } from "../src/worker/studio.ts";
-import { localStudioPrompt } from "../src/worker/prompts.ts";
+import { localStudioPrompt, suggestPrompt } from "../src/worker/prompts.ts";
 import { studioReferenceEdge } from "../src/shared/studio.ts";
 
 describe("local Studio render references", () => {
@@ -285,5 +285,36 @@ describe("layered outfits", () => {
 
 	it("reads old outfits (jacket listed before the top) the right way round", () => {
 		expect(layersFromIds([jacket.id, tee.id, jeans.id, shoes.id], map).torso).toEqual([tee.id, jacket.id]);
+	});
+});
+
+describe("Outfit-Auswahlprompt", () => {
+	it("übergibt den tatsächlichen Schnitt und Untertyp zusammen mit dem Wetter", () => {
+		const prompt = suggestPrompt([item({ name: "Jeans", subcategory: "Denim", fit: "wide-leg", material: "Baumwolle" })], "gefühlt 7 °C", "Spaziergang", "", "Freitag");
+		expect(prompt).toContain("Denim | wide-leg | Baumwolle");
+		expect(prompt).toContain("gefühlt 7 °C");
+		expect(prompt).toContain("Spaziergang");
+		expect(prompt).toContain("keine Slides");
+	});
+});
+
+describe("Zusammenstellung als ganzer Look", () => {
+	const top = item({ category: "top" });
+	const jeans = item({ category: "bottom" });
+	const slides = item({ category: "shoes", subcategory: "Slides", favorite: true });
+	const sneakers = item({ category: "shoes", name: "Sneaker" });
+	for (const weather of [{ feelsLike: 7 }, { feelsLike: 22, precipProb: 80 }]) {
+		it("filtert Slides vor der Auswahl bei " + JSON.stringify(weather), () => {
+			const looks = suggestOutfits([top, jeans, slides, sneakers], { weather, seed: "check" });
+			expect(looks.length).toBeGreaterThan(0);
+			for (const look of looks) {
+				expect(look.itemIds).toEqual(expect.arrayContaining([top.id, jeans.id, sneakers.id]));
+				expect(look.itemIds).not.toContain(slides.id);
+				expect(look.reason).not.toContain("mit Jacke");
+			}
+		});
+	}
+	it("gibt ein einzelnes Oberteil nicht als Outfit aus", () => {
+		expect(suggestOutfits([top, sneakers], { weather: { feelsLike: 7 } })).toEqual([]);
 	});
 });
