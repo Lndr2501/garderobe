@@ -38,8 +38,13 @@ private func cutout(input: URL, full: URL, thumb: URL) throws {
             throw CutoutError.noForeground
         }
         let buffer = try result.generateScaledMaskForImage(forInstances: result.allInstances, from: handler)
-        let mask = CIImage(cvPixelBuffer: buffer)
-        guard mask.extent == image.extent else { throw CutoutError.unusableMask }
+        let visionMask = CIImage(cvPixelBuffer: buffer)
+        guard visionMask.extent == image.extent else { throw CutoutError.unusableMask }
+        // Pull the feathered mask in by one pixel so the grey studio background
+        // doesn't leave a bright fringe when the garment is displayed on dark blue.
+        let mask = visionMask.clampedToExtent()
+            .applyingFilter("CIMorphologyMinimum", parameters: [kCIInputRadiusKey: 1])
+            .cropped(to: image.extent)
         readMask(mask, .R8)
         foregroundImage = image.applyingFilter("CIBlendWithMask", parameters: [
             kCIInputBackgroundImageKey: clear.cropped(to: image.extent), kCIInputMaskImageKey: mask

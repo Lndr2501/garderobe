@@ -281,6 +281,33 @@ test("studio: rail keeps the original until the transparent cutout is ready", as
 	await page.locator(".rack").screenshot({ path: `${SHOTS}/${info.project.name}-studio-cutout.png`, animations: "disabled" });
 });
 
+test("mobile rail keeps the side garment’s proportions and lets you select it", async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+	await login(page);
+	const image = await garment("#242632");
+	const upload = await page.request.post("/api/images", { multipart: { file: { name: "rail.jpg", mimeType: "image/jpeg", buffer: image } } });
+	const key = (await upload.json()).key;
+	const res = await page.request.post("/api/items", { data: { name: "Mitte", category: "top", imageFront: key } });
+	const item = await res.json();
+	const left = { ...item, id: "rack-left", name: "Links" };
+	const right = { ...item, id: "rack-right", name: "Rechts" };
+	await page.route("**/api/items", (route) => route.fulfill({ json: [left, item, right] }));
+	await page.goto("/");
+	const rack = page.locator(".rack").first();
+	await expect(rack.locator(".rack-slot.center")).toHaveAccessibleName("Mitte");
+	const piece = rack.getByRole("button", { name: "Rechts", exact: true }).locator(".piece");
+	const transform = await piece.evaluate((el) => new DOMMatrix(getComputedStyle(el).transform).toJSON());
+	expect(transform.a).toBeGreaterThan(0.45);
+	expect(transform.a).toBeLessThan(0.7);
+	expect(transform.a).toBeCloseTo(transform.d);
+	const middle = rack.locator(".rack-slot.center .piece");
+	expect((await piece.boundingBox())!.x).toBeGreaterThan((await middle.boundingBox())!.x + 110);
+	await piece.locator("img").click();
+	await expect(rack.locator(".rack-slot.center")).toHaveAccessibleName("Rechts");
+	await expect(page).toHaveURL(/\/$/);
+});
+
 test("local 3D sends a centered white square as a JPEG reference", async ({ page }) => {
 	await login(page);
 	const png = await sharp({ create: { width: 700, height: 350, channels: 4, background: "#243a56ff" } }).png().toBuffer();

@@ -30,6 +30,7 @@
 	--shelf-b: #c9b9a1;
 	--closet-a: #f3f8ff;
 	--closet-b: #d6e6fa;
+	--garment-light: rgba(255, 255, 255, 0.58);
 	--safe-top: env(safe-area-inset-top, 0px);
 	--safe-bottom: env(safe-area-inset-bottom, 0px);
 	--tabbar-h: 64px;
@@ -65,6 +66,7 @@
 		--shelf-b: #20283a;
 		--closet-a: #16223a;
 		--closet-b: #0f1a2e;
+		--garment-light: rgba(137, 155, 185, 0.31);
 		color-scheme: dark;
 	}
 }
@@ -834,6 +836,15 @@ h3 {
 	--piece-h: min(30cqw, 150px);
 }
 
+.rack:not(.shelf)::before {
+	content: "";
+	position: absolute;
+	inset: 12px 0 auto;
+	height: calc(var(--piece-h) + var(--hook-h));
+	background: radial-gradient(ellipse at 50% 45%, var(--garment-light), transparent 72%);
+	pointer-events: none;
+}
+
 .rack .rail {
 	position: absolute;
 	left: 0;
@@ -867,6 +878,7 @@ h3 {
 	/* without this the slot grows to its (wide) content and the rail gets sparse */
 	min-width: 0;
 	scroll-snap-align: center;
+	pointer-events: none;
 	display: flex;
 	justify-content: center;
 	border: none;
@@ -894,6 +906,7 @@ h3 {
 .rack-slot .hook {
 	width: 17px;
 	height: var(--hook-h);
+	pointer-events: auto;
 	color: var(--rail-b);
 	flex: none;
 	position: relative;
@@ -909,7 +922,7 @@ h3 {
 	display: flex;
 	align-items: flex-start;
 	justify-content: center;
-	pointer-events: none;
+	pointer-events: auto;
 	transform-origin: 50% 0;
 	will-change: transform;
 }
@@ -2089,6 +2102,14 @@ h3 {
 	--my: 35%;
 	--sx: 0px;
 	--fs: 1;
+}
+
+.stage::before {
+	content: "";
+	position: absolute;
+	inset: 12px 0 24px;
+	background: radial-gradient(ellipse at 50% 46%, var(--garment-light), transparent 72%);
+	pointer-events: none;
 }
 
 .stage-tilt {

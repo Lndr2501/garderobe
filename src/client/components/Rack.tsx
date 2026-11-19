@@ -34,10 +34,7 @@ export function Rack({ items, display, onOpen, label }: RackProps) {
 		const mid = el.scrollLeft + el.clientWidth / 2;
 		const slots = el.children;
 		const shelf = display === "shelf";
-		// Side pieces look turned (narrow) on the rail; shelf pieces just get smaller.
-		const sideX = shelf ? 0.6 : 0.3;
-		const sideY = shelf ? 0.6 : 0.8;
-		const tuck = shelf ? 0.5 : 0.3;
+		const sideScale = shelf ? 0.6 : 0.54;
 		let best = 0;
 		let bestD = Infinity;
 		for (let i = 0; i < slots.length; i++) {
@@ -51,11 +48,12 @@ export function Rack({ items, display, onOpen, label }: RackProps) {
 			const piece = body?.querySelector<HTMLElement>(".piece");
 			if (body && piece) {
 				const w = body.offsetWidth || step;
-				// Neighbours make room for the wide centre piece and tuck slightly behind it.
-				const push = Math.max(0, w / 2 + w * sideX * tuck - step);
-				const tx = Math.sign(p) * t * push;
+				// Set visual distance independently of scroll snap, without squeezing either axis.
+				const gap = Math.max(step, Math.min(w * (1 + sideScale) / 2, (el.clientWidth - w * sideScale) / 2 - 8));
+				const distance = t * gap + Math.max(0, ap - 1) * step;
+				const tx = Math.sign(p) * distance - (c - mid);
 				body.style.transform = `translate3d(${tx.toFixed(1)}px,0,0)`;
-				piece.style.transform = `scale(${(1 - t * (1 - sideX)).toFixed(3)}, ${(1 - t * (1 - sideY)).toFixed(3)})`;
+				piece.style.transform = `scale(${(1 - t * (1 - sideScale)).toFixed(3)})`;
 				body.style.opacity = ap > 7 ? "0" : "1";
 			}
 			s.style.zIndex = String(200 - Math.min(199, Math.round(ap * 10)));
