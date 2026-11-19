@@ -1,7 +1,7 @@
 import { Camera, Download, Plus, Sparkles, Trash2, UserRound, Wand2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearch } from "wouter";
-import type { Item, TryOn } from "../../shared/types.ts";
+import { LOCAL_FLUX_PROVIDER, type Item, type TryOn } from "../../shared/types.ts";
 import { api, imgUrl, uploadImage } from "../api.ts";
 import { Holo } from "../components/Holo.tsx";
 import { Segmented } from "../components/Inputs.tsx";
@@ -86,7 +86,10 @@ function AiTab({ initialIds }: { initialIds: string[] }) {
 	const [uploading, setUploading] = useState(false);
 	const [view, setView] = useState<TryOn | null>(null);
 	const aiOn = !!settings?.ai.areas.tryon;
-	const chosen = ids.map((id) => map.get(id)).filter((x): x is Item => !!x);
+	const local = settings?.ai.routes.tryon.provider === LOCAL_FLUX_PROVIDER;
+	const maxItems = local ? 2 : 5;
+	const selected = ids.slice(0, maxItems);
+	const chosen = selected.map((id) => map.get(id)).filter((x): x is Item => !!x);
 
 	const uploadPerson = async (f: File | undefined) => {
 		if (!f) return;
@@ -106,7 +109,7 @@ function AiTab({ initialIds }: { initialIds: string[] }) {
 	const run = async () => {
 		setBusy(true);
 		try {
-			const t = await api<TryOn>("/api/ai/tryon", { method: "POST", body: { itemIds: ids } });
+			const t = await api<TryOn>("/api/ai/tryon", { method: "POST", body: { itemIds: selected } });
 			await qc.invalidateQueries({ queryKey: keys.tryons });
 			setView(t);
 		} catch (e) {
@@ -128,7 +131,7 @@ function AiTab({ initialIds }: { initialIds: string[] }) {
 				<Wand2 size={26} />
 				<b>KI-Anprobe braucht ein Bildmodell</b>
 				<span className="small muted">
-					Wähle in den Einstellungen unter „KI“ für „Anprobe“ einen Anbieter mit Bildmodell – z.B. Cloudflare mit FLUX.2 (Gratis-Kontingent), <code>gpt-image-1</code> über <code>/images/edits</code> oder ein Chat-Modell mit Bildausgabe im Modus „Chat“.
+					Wähle in den Einstellungen unter „KI“ für „Anprobe“ einen Anbieter mit Bildmodell – z.B. FLUX.2 Klein 9B lokal auf deinem Mac, Cloudflare mit FLUX.2 (Gratis-Kontingent), <code>gpt-image-1</code> über <code>/images/edits</code> oder ein Chat-Modell mit Bildausgabe im Modus „Chat“.
 				</span>
 				<Link href="/einstellungen" className="btn primary" style={{ alignSelf: "flex-start" }}>
 					Einstellungen öffnen
@@ -166,11 +169,11 @@ function AiTab({ initialIds }: { initialIds: string[] }) {
 						</div>
 					)}
 					<input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => void uploadPerson(e.target.files?.[0]).finally(() => (e.target.value = ""))} />
-					<span className="tiny muted">Dein Foto wird nur in deinem eigenen Speicher abgelegt und für die Anprobe an den eingestellten KI-Anbieter geschickt.</span>
+					<span className="tiny muted">{local ? "Lokale Anprobe: Dein Foto und die Teile werden nur auf deinem Mac verarbeitet." : "Für diese Anprobe wird dein Foto an den eingestellten KI-Anbieter geschickt."}</span>
 				</div>
 				<div className="card stack">
 					<div className="section-title">
-						<h2>2 · Teile (max. 5)</h2>
+						<h2>2 · Teile (max. {maxItems})</h2>
 					</div>
 					{chosen.length > 0 ? (
 						<div className="thumb-strip">
@@ -187,7 +190,7 @@ function AiTab({ initialIds }: { initialIds: string[] }) {
 						<Plus size={16} /> Teile wählen
 					</button>
 					<button className="btn primary block" onClick={() => void run()} disabled={busy || !chosen.length || !settings?.personPhoto}>
-						{busy ? <span className="spinner" /> : <Sparkles size={17} />} {busy ? "Wird anprobiert … (bis zu 1 Min.)" : "Anprobieren"}
+						{busy ? <span className="spinner" /> : <Sparkles size={17} />} {busy ? "Wird anprobiert …" : "Anprobieren"}
 					</button>
 				</div>
 			</div>
@@ -218,11 +221,11 @@ function AiTab({ initialIds }: { initialIds: string[] }) {
 			{picker && (
 				<ItemPicker
 					title="Teile anprobieren"
-					initial={ids}
-					max={5}
+					initial={selected}
+					max={maxItems}
 					onClose={() => setPicker(false)}
 					onDone={(sel) => {
-						setIds(sel.slice(0, 5));
+						setIds(sel.slice(0, maxItems));
 						setPicker(false);
 					}}
 				/>

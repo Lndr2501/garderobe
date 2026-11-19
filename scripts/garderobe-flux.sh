@@ -19,14 +19,16 @@ case "$mode:$width:$height" in
 	:768:1024|:1024:768|studio:768:1024|studio:1024:768|studio-9b:768:1024|studio-9b:1024:768)
 		[[ -x "$cli" ]] || exit 69
 		[[ ${#prompt} -le 2000 && "$prompt" == 'Professional e-commerce product photo '* ]] || exit 65 ;;
+	tryon-9b:768:1024)
+		[[ "$ext" == bundle && -x "$cli" && ${#prompt} -le 2000 && "$prompt" == 'Photorealistic virtual try-on.'* ]] || exit 65 ;;
 	cutout:0:0) [[ -z "$prompt" ]] || exit 65 ;;
 	*) exit 65 ;;
 esac
 case "$mode:$ext" in
-	*:jpg|*:png|*:webp|cutout:gif|cutout:avif) ;;
+	tryon-9b:bundle|*:jpg|*:png|*:webp|cutout:gif|cutout:avif) ;;
 	*) exit 65 ;;
 esac
-[[ -z "$mode" || -x "$cutout" ]] || exit 73
+[[ -z "$mode" || "$mode" == tryon-9b || -x "$cutout" ]] || exit 73
 
 dir=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/garderobe-flux.XXXXXXXX")
 pid=
@@ -42,10 +44,6 @@ trap 'exit 1' HUP INT TERM
 
 input="$dir/input.$ext"
 max=$((12 * 1024 * 1024))
-/usr/bin/head -c "$((max + 1))" > "$input"
-bytes=$(/usr/bin/wc -c < "$input")
-(( bytes > 0 && bytes <= max )) || exit 65
-
 run() {
 	local status="$1"
 	shift
@@ -57,6 +55,32 @@ run() {
 	fi
 	pid=
 }
+
+if [[ "$mode" == tryon-9b ]]; then
+	# Fixed-size frame headers, no caller-supplied paths. Person is always first.
+	/usr/bin/perl -e '
+		use strict; use warnings;
+		binmode STDIN;
+		my @ext = qw(jpg png webp); my $n = 0;
+		while (my $r = read(STDIN, my $header, 5)) {
+			die unless $r == 5 && $n < 3;
+			my ($fmt,$len) = unpack("CN", $header);
+			die unless $fmt < 3 && $len > 0 && $len <= 12*1024*1024;
+			open my $out, ">:raw", "$ARGV[0]/ref$n.$ext[$fmt]" or die;
+			while ($len) { my $got = read(STDIN, my $buf, $len > 65536 ? 65536 : $len); die unless $got; print {$out} $buf or die; $len -= $got; }
+			close $out or die; ++$n;
+		}
+		die unless $n >= 2;
+	' "$dir" || exit 65
+	refs=()
+	for ref in "$dir"/ref*; do refs+=(--images "$ref"); done
+	run 70 "$cli" i2i "$prompt" "${refs[@]}" --model klein-9b --transformer-quant int4 --text-quant 4bit --memory-profile conservative --steps 4 --guidance 1.0 --seed 42 --width "$width" --height "$height" --max-reference-megapixels 0.38 -o "$dir/output.png"
+	/bin/cat "$dir/output.png"
+	exit 0
+fi
+/usr/bin/head -c "$((max + 1))" > "$input"
+bytes=$(/usr/bin/wc -c < "$input")
+(( bytes > 0 && bytes <= max )) || exit 65
 
 render="$input"
 if [[ "$mode" != cutout ]]; then

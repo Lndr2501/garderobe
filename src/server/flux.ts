@@ -38,16 +38,15 @@ export function createFluxStudio(env: NodeJS.ProcessEnv): LocalStudio | undefine
 		"-i", identity, "-l", user, "-p", String(port), "--", host, REMOTE_COMMAND,
 	];
 
-	const send = async (mode: "studio-9b" | "cutout", prompt: string, image: StudioReference, width: number, height: number) => {
-		const ext = {
-			"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
-			...(mode === "cutout" ? { "image/gif": "gif", "image/avif": "avif" } : {}),
-		}[image.type];
-		if (!ext || !image.data.byteLength || image.data.byteLength > MAX_IMAGE_BYTES) {
-			throw new Error("Das Bildformat wird auf dem Mac nicht unterstützt oder das Bild ist größer als 12 MB.");
-		}
-		const header = Buffer.from(`${width} ${height} ${ext} ${mode}\n${prompt.replace(/\s+/g, " ").trim()}\n`);
-		return new Promise<StudioCutout>((resolve, reject) => {
+	// Studio and try-on share the same Mac/GPU. Keep SSH calls serialized.
+	let tail = Promise.resolve();
+	const exchange = (header: Buffer, payload: Buffer) => {
+		const job = tail.then(() => transfer(header, payload));
+		tail = job.then(() => {}, () => {});
+		return job;
+	};
+	const transfer = (header: Buffer, payload: Buffer) => {
+		return new Promise<Buffer>((resolve, reject) => {
 			const child = spawn("ssh", args, { stdio: ["pipe", "pipe", "ignore"] });
 			const chunks: Buffer[] = [];
 			let bytes = 0;
@@ -77,16 +76,42 @@ export function createFluxStudio(env: NodeJS.ProcessEnv): LocalStudio | undefine
 				if (code === 74) return reject(new Error("Das Kleidungsstück konnte nicht sauber freigestellt werden."));
 				if (code !== 0) return reject(new Error("Der Mac konnte das Studio-Bild nicht verarbeiten."));
 				try {
-					resolve(parseCutout(Buffer.concat(chunks, bytes)));
+					resolve(Buffer.concat(chunks, bytes));
 				} catch (err) {
 					reject(err);
 				}
 			});
 			child.stdin.write(header);
-			child.stdin.end(Buffer.from(image.data));
+			child.stdin.end(payload);
 		});
 	};
+	const send = async (mode: "studio-9b" | "cutout", prompt: string, image: StudioReference, width: number, height: number) => {
+		const ext = {
+			"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
+			...(mode === "cutout" ? { "image/gif": "gif", "image/avif": "avif" } : {}),
+		}[image.type];
+		if (!ext || !image.data.byteLength || image.data.byteLength > MAX_IMAGE_BYTES) {
+			throw new Error("Das Bildformat wird auf dem Mac nicht unterstützt oder das Bild ist größer als 12 MB.");
+		}
+		const header = Buffer.from(`${width} ${height} ${ext} ${mode}\n${prompt.replace(/\s+/g, " ").trim()}\n`);
+		return parseCutout(await exchange(header, Buffer.from(image.data)));
+	};
 	return {
+		tryOn: async (prompt, images) => {
+			if (images.length < 2 || images.length > 3) throw new Error("Ein Personenfoto und ein bis zwei Teile erforderlich.");
+			const frames: Buffer[] = [];
+			for (const ref of images) {
+				const fmt = ["image/jpeg", "image/png", "image/webp"].indexOf(ref.type);
+				if (fmt < 0 || !ref.data.byteLength || ref.data.byteLength > MAX_IMAGE_BYTES) throw new Error("Ungültiges Referenzbild für die lokale Anprobe.");
+				const frame = Buffer.alloc(5);
+				frame[0] = fmt;
+				frame.writeUInt32BE(ref.data.byteLength, 1);
+				frames.push(frame, Buffer.from(ref.data));
+			}
+			const result = await exchange(Buffer.from(`768 1024 bundle tryon-9b\n${prompt.replace(/\s+/g, " ").trim()}\n`), Buffer.concat(frames));
+			if (result.length < 33 || result.length > MAX_IMAGE_BYTES || !result.subarray(0, PNG_HEADER.length).equals(PNG_HEADER)) throw new Error("Kein gültiges Anprobebild vom Mac erhalten.");
+			return { data: Uint8Array.from(result).buffer, type: "image/png" };
+		},
 		generate: (prompt, image, { width, height }) => send("studio-9b", prompt, image, width, height),
 		cutout: (image) => send("cutout", "", image, 0, 0),
 	};

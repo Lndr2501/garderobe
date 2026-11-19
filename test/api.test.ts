@@ -307,14 +307,14 @@ async function upload(c: Client): Promise<string> {
 }
 
 describe("studio pictures", () => {
-	it("shows configuration status and allows local FLUX only for Studio", async () => {
+	it("shows configuration status and allows local FLUX only for image areas", async () => {
 		const c = await loggedIn();
 		const routes = { studio: { provider: "local-flux", model: "ignored" } };
 		const saved = await c.json<AppSettings>("/api/settings", { method: "PATCH", body: { ai: { routes } } });
 		expect(saved.ai.routes.studio).toEqual({ provider: "local-flux", model: "klein-9b", mode: "edits" });
 		expect(saved.ai.areas.studio).toBe(false);
 		expect(saved.ai.studio.localFluxAvailable).toBe(false);
-		expect((await c.req("/api/settings", { method: "PATCH", body: { ai: { routes: { tryon: routes.studio } } } })).status).toBe(400);
+		expect((await c.req("/api/settings", { method: "PATCH", body: { ai: { routes: { text: routes.studio } } } })).status).toBe(400);
 
 		const item = await c.json<Item>("/api/items", { body: { name: "Pulli", category: "top" } });
 		const input = await upload(c);
@@ -556,6 +556,22 @@ describe("AI (OpenAI-compatible)", () => {
 		const ai = await c.json<{ source: string; suggestions: { itemIds: string[] }[] }>("/api/ai/suggest", { body: { weather: { feelsLike: 14 } } });
 		expect(ai.source).toBe("ai");
 		expect(ai.suggestions[0]!.itemIds).toEqual([top.id, bottom.id]);
+	});
+
+	it("runs a local try-on without a cloud request and rejects excess references", async () => {
+		const c = await loggedIn();
+		const key = await upload(c);
+		const img = { data: Uint8Array.from(PNG_1PX).buffer, type: "image/png" };
+		const tryOn = vi.fn(async () => img);
+		env.FLUX_STUDIO = { tryOn, generate: vi.fn(), cutout: vi.fn() };
+		await c.json("/api/settings", { method: "PATCH", body: { personPhoto: key, ai: { routes: { tryon: { provider: "local-flux" } } } } });
+		const item = await c.json<Item>("/api/items", { body: { name: "Jacke", imageFront: key } });
+		const cloud = vi.spyOn(globalThis, "fetch");
+		const request = (ids: string[]) => c.req("/api/ai/tryon", { body: { itemIds: ids } });
+		expect((await request([item.id, item.id, item.id])).status).toBe(400);
+		expect((await request([item.id])).ok).toBe(true);
+		expect(tryOn).toHaveBeenCalledTimes(1);
+		expect(cloud).not.toHaveBeenCalled();
 	});
 
 	it("generates image try-ons via /images/edits", async () => {

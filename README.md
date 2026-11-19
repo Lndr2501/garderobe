@@ -94,6 +94,10 @@ steht im Dashboard rechts unter „Account details“.
 
 Schlüssel bleiben auf dem Server und werden nie wieder angezeigt.
 
+### Lokale Anprobe
+
+Unter **Einstellungen → KI → Anprobe** „FLUX.2 Klein 9B (Mac per SSH)“ auswählen. Die App sendet das Personenfoto zuerst, danach ein oder zwei Teile an denselben Mac-Helfer wie beim Studio. Es gibt keinen Cloud-Fallback. Der Mac benötigt den aktualisierten Helfer und /usr/bin/perl.
+
 ### Studio-Bilder lokal auf einem Mac (FLUX.2 Klein 9B)
 
 Bei **Original freistellen** schickt der App-Server das gespeicherte Foto per SSH

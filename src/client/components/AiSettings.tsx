@@ -217,7 +217,7 @@ export function AiSettings({ settings }: { settings: AppSettings }) {
 				{AREAS.map((a) => {
 					const r = routes[a.key];
 					const prov = providers.find((p) => p.id === r.provider);
-					const local = a.key === "studio" && r.provider === LOCAL_FLUX_PROVIDER;
+					const local = a.image && r.provider === LOCAL_FLUX_PROVIDER;
 					const listId = `models-${a.key}`;
 					const placeholder =
 						prov?.kind === "cloudflare" ? (a.image ? FLUX : CF_CHAT) : a.image ? "gpt-image-1" : a.key === "vision" ? "Modell mit Bildverständnis" : "gpt-4.1-mini";
@@ -245,8 +245,8 @@ export function AiSettings({ settings }: { settings: AppSettings }) {
 									}}
 								>
 									<option value="">Aus</option>
-									{a.key === "studio" && (
-										<option value={LOCAL_FLUX_PROVIDER} disabled={!ai.studio.localFluxAvailable}>
+									{a.image && (
+											<option value={LOCAL_FLUX_PROVIDER} disabled={!ai.studio.localFluxAvailable}>
 											FLUX.2 Klein 9B (Mac per SSH){!ai.studio.localFluxAvailable && " – Server nicht eingerichtet"}
 										</option>
 									)}
@@ -290,7 +290,7 @@ export function AiSettings({ settings }: { settings: AppSettings }) {
 									/>
 								</div>
 							)}
-							{a.key === "studio" && r.provider && (
+							{a.image && r.provider && (
 								<div className="stack" style={{ gap: 10 }}>
 									<div className="row between">
 										<span className="small">

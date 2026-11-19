@@ -52,6 +52,21 @@ cp "$1" "$3"
 		const studio = createFluxStudio(vars)!;
 		vi.stubEnv("FLUX_TEST_CLEAN_EDGE", "--clean-edge");
 		expect(await studio.generate(prompt, { data: input, type: "image/png" }, { width: 1024, height: 768 })).toEqual({ full: png, thumb: png });
+		await writeFile(join(dir, "Flux2CLI"), `#!/bin/bash
+set -eu
+refs=0
+while (( $# )); do
+	case "$1" in
+		--images) cmp "$2" "$FLUX_TEST_DIR/expected.png"; refs=$((refs+1)); shift ;;
+		-o) output="$2"; shift ;;
+	esac
+	shift
+done
+[[ "$refs" == 3 ]]
+cp "$FLUX_TEST_DIR/expected.png" "$output"
+`, { mode: 0o700 });
+		const refs = Array.from({ length: 3 }, () => ({ data: input, type: "image/png" }));
+		expect((await studio.tryOn!("Photorealistic virtual try-on. Test.", refs)).data).toEqual(input);
 		vi.stubEnv("FLUX_TEST_CLEAN_EDGE", "");
 		vi.stubEnv("FLUX2CLI_PATH", join(dir, "missing"));
 		expect(await studio.cutout({ data: input, type: "image/webp" })).toEqual({ full: png, thumb: png });

@@ -32,6 +32,7 @@ export interface StudioEnv extends ImageEnv {
 export type StudioReference = { data: ArrayBuffer; type: string };
 export type StudioCutout = { full: Uint8Array; thumb: Uint8Array };
 export interface LocalStudio {
+	tryOn?(prompt: string, images: StudioReference[]): Promise<StudioReference>;
 	generate(prompt: string, image: StudioReference, size: { width: number; height: number }): Promise<StudioCutout>;
 	cutout(image: StudioReference): Promise<StudioCutout>;
 }

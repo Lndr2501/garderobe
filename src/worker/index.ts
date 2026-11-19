@@ -976,8 +976,11 @@ app.post("/api/ai/tryon", async (c) => {
 	const settings = await loadSettings(c.env);
 	if (!settings.personPhoto) throw new HttpError(400, "Bitte zuerst ein Ganzkörperfoto von dir hochladen");
 	const store = await loadAiStore(c.env.DB);
+	const local = store.routes.tryon.provider === LOCAL_FLUX_PROVIDER;
+	if (local && itemIds.length > 2) throw new HttpError(400, "Auf dem Mac sind maximal zwei Teile pro Anprobe möglich.");
+	if (local && !c.env.FLUX_STUDIO?.tryOn) throw new HttpError(503, "Der lokale Mac ist nicht eingerichtet.");
 	const ai = configFor(store, "tryon");
-	if (!aiConfigured(ai)) throw new HttpError(400, "Kein Bild-Anbieter für die Anprobe eingerichtet (Einstellungen → KI).");
+	if (!local && !aiConfigured(ai)) throw new HttpError(400, "Kein Bild-Anbieter für die Anprobe eingerichtet (Einstellungen → KI).");
 	const person = await getImageBytes(c.env, settings.personPhoto);
 	if (!person) throw new HttpError(400, "Dein Foto wurde nicht gefunden, bitte neu hochladen");
 	const items = await Promise.all(itemIds.map((id) => getItem(c.env.DB, id)));
@@ -985,8 +988,10 @@ app.post("/api/ai/tryon", async (c) => {
 	for (const it of items) {
 		// The clean studio picture (if any) is the better reference.
 		const key = (!it.preferOriginal && it.imageStudio) || it.imageFront;
+		if (!key && local) throw new HttpError(400, "Ein gewähltes Teil hat kein Foto.");
 		if (!key) continue;
 		const img = await getImageBytes(c.env, key);
+		if (!img && local) throw new HttpError(400, "Ein Teilefoto fehlt.");
 		if (img) images.push({ ...img, name: `item-${images.length}.${img.type.split("/")[1]}` });
 	}
 	const prompt = tryOnPrompt(items.map((i) => i.name || i.subcategory || i.category));
@@ -1004,7 +1009,9 @@ app.post("/api/ai/tryon", async (c) => {
 	}
 	let out: { data: ArrayBuffer; type: string };
 	try {
-		out = await generateImage(ai, ai.kind === "cloudflare" ? tryOnPromptEn(items.map((i) => i.name || i.subcategory || i.category)) : prompt, images, size);
+		out = local
+			? await c.env.FLUX_STUDIO!.tryOn!(tryOnPromptEn(items.map((i) => i.name || i.subcategory || i.category)), images)
+			: await generateImage(ai, ai.kind === "cloudflare" ? tryOnPromptEn(items.map((i) => i.name || i.subcategory || i.category)) : prompt, images, size);
 	} catch (err) {
 		if (neurons) await releaseUsage(c.env.DB, ai.providerId, neurons);
 		throw err;

@@ -109,8 +109,8 @@ export async function loadAiStore(db: Db): Promise<AiStore> {
 	if (raw.version !== 2) return migrateLegacy(raw);
 	const base = emptyStore();
 	const routes = { ...base.routes, ...(raw.routes ?? {}) };
-	if (routes.studio?.provider === LOCAL_FLUX_PROVIDER) {
-		routes.studio = { provider: LOCAL_FLUX_PROVIDER, model: LOCAL_FLUX_MODEL, mode: "edits" };
+	for (const area of IMAGE_AREAS) if (routes[area]?.provider === LOCAL_FLUX_PROVIDER) {
+		routes[area] = { provider: LOCAL_FLUX_PROVIDER, model: LOCAL_FLUX_MODEL, mode: "edits" };
 	}
 	return {
 		version: 2,
@@ -222,7 +222,7 @@ export async function releaseUsage(db: Db, provider: string, neurons: number): P
 
 export async function publicAi(db: Db, store: AiStore, localFluxAvailable = false): Promise<AiSettingsPublic> {
 	const areas = Object.fromEntries(AI_AREAS.map((a) => [a, areaReady(configFor(store, a))])) as Record<AiArea, boolean>;
-	if (store.routes.studio.provider === LOCAL_FLUX_PROVIDER) areas.studio = localFluxAvailable;
+	for (const area of IMAGE_AREAS) if (store.routes[area].provider === LOCAL_FLUX_PROVIDER) areas[area] = localFluxAvailable;
 	const studioCfg = configFor(store, "studio");
 	const used = studioCfg.providerId ? await usageToday(db, studioCfg.providerId) : { neurons: 0, images: 0 };
 	return {
@@ -300,7 +300,7 @@ export function applyAiPatch(store: AiStore, a: Record<string, unknown>): AiStor
 			const cur = next.routes[area];
 			const provider = text(r.provider, 40);
 			const model = text(r.model, 160);
-			if (provider === LOCAL_FLUX_PROVIDER && area !== "studio") throw new AiError("Lokales FLUX ist nur für Studio-Bilder verfügbar.", 400);
+			if (provider === LOCAL_FLUX_PROVIDER && !IMAGE_AREAS.includes(area)) throw new AiError("Lokales FLUX ist nur für Studio-Bilder und Anprobe verfügbar.", 400);
 			if ((provider ?? cur.provider) === LOCAL_FLUX_PROVIDER) {
 				next.routes[area] = { provider: LOCAL_FLUX_PROVIDER, model: LOCAL_FLUX_MODEL, mode: "edits" };
 				continue;
@@ -357,7 +357,7 @@ export function applyAiPatch(store: AiStore, a: Record<string, unknown>): AiStor
 	const ids = new Set(next.providers.map((p) => p.id));
 	for (const area of AI_AREAS) {
 		const { provider } = next.routes[area];
-		if (area === "studio" && provider === LOCAL_FLUX_PROVIDER) continue;
+		if (IMAGE_AREAS.includes(area) && provider === LOCAL_FLUX_PROVIDER) continue;
 		if (provider && !ids.has(provider)) next.routes[area] = { ...EMPTY_ROUTE };
 	}
 	return next;
