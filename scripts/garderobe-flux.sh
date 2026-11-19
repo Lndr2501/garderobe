@@ -11,6 +11,8 @@ default_cli=/Applications/Flux2CLI
 # copy with that companion can be used without modifying the original install.
 if [[ -x "$runtime" ]]; then default_cli="$runtime"; fi
 cli=${FLUX2CLI_PATH:-$default_cli}
+# Keep Garderobe models out of macOS's purgeable Library/Caches tree.
+models_dir="${GARDE_MODELS_DIR:-$HOME/Library/Application Support/Garderobe/models}"
 cutout=${GARDE_CUTOUT_PATH:-"$HOME/.local/libexec/garderobe-studio-cutout"}
 
 IFS=' ' read -r width height ext mode
@@ -74,7 +76,7 @@ if [[ "$mode" == tryon-9b ]]; then
 	' "$dir" || exit 65
 	refs=()
 	for ref in "$dir"/ref*; do refs+=(--images "$ref"); done
-	run 70 "$cli" i2i "$prompt" "${refs[@]}" --model klein-9b --transformer-quant int4 --text-quant 4bit --memory-profile conservative --steps 4 --guidance 1.0 --seed 42 --width "$width" --height "$height" --max-reference-megapixels 0.38 -o "$dir/output.png"
+	run 70 "$cli" i2i "$prompt" "${refs[@]}" --model klein-9b --transformer-quant int4 --text-quant 4bit --memory-profile conservative --steps 4 --guidance 1.0 --seed 42 --width "$width" --height "$height" --max-reference-megapixels 0.38 --models-dir "$models_dir" -o "$dir/output.png"
 	/bin/cat "$dir/output.png"
 	exit 0
 fi
@@ -90,7 +92,7 @@ if [[ "$mode" != cutout ]]; then
 	extra=()
 	if [[ "$mode" == studio-9b ]]; then
 		model=klein-9b
-		extra=(--transformer-quant int4 --text-quant 4bit --memory-profile conservative --steps 4 --guidance 1.0 --seed 42)
+		extra=(--models-dir "$models_dir" --transformer-quant int4 --text-quant 4bit --memory-profile conservative --steps 4 --guidance 1.0 --seed 42)
 	fi
 	# Bash 3 set -u needs the conditional form when extra is empty.
 	run 70 "$cli" i2i --model "$model" --width "$width" --height "$height" --output "$render" "$prompt" --images "$input" ${extra[@]+"${extra[@]}"}

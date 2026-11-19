@@ -33,7 +33,7 @@ set -eu
 [[ "${"$"}{11}" == "--images" ]]
 cmp "${"$"}{12}" "$FLUX_TEST_DIR/expected.png"
 cp "${"$"}{12}" "$9"
-[[ "${"$"}{*:13}" == "--transformer-quant int4 --text-quant 4bit --memory-profile conservative --steps 4 --guidance 1.0 --seed 42" ]]
+[[ "${"$"}{*:13}" == "--models-dir $HOME/Library/Application Support/Garderobe/models --transformer-quant int4 --text-quant 4bit --memory-profile conservative --steps 4 --guidance 1.0 --seed 42" ]]
 echo "CLI progress; must not be mixed with PNG on stdout"
 `, { mode: 0o700 });
 		await writeFile(join(dir, "cutout"), `#!/bin/bash
